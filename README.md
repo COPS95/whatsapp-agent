@@ -1,9 +1,5 @@
 <p align="center">
-  <img src="docs/assets/hero.png" alt="WhatsApp AgentKit — tu agente de WhatsApp con IA, construido por Claude Code" width="820">
-</p>
-
-<p align="center">
-  <a href="https://github.com/Hainrixz/whatsapp-agentkit"><img src="https://img.shields.io/github/stars/Hainrixz/whatsapp-agentkit?style=flat-square&color=25D366" alt="Estrellas"></a>
+  <a href="https://github.com/COPS95/whatsapp-agent"><img src="https://img.shields.io/github/stars/COPS95/whatsapp-agent?style=flat-square&color=25D366" alt="Estrellas"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/licencia-MIT-blue?style=flat-square" alt="Licencia MIT"></a>
   <img src="https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square" alt="Python 3.11+">
   <img src="https://img.shields.io/badge/IA-Claude-D97757?style=flat-square" alt="Claude">
@@ -11,7 +7,7 @@
 </p>
 
 <p align="center">
-  <b><a href="https://hainrixz.github.io/whatsapp-agentkit/">Ver el sitio</a></b> ·
+  <b><a href="https://cops95.github.io/whatsapp-agent/">Ver el sitio</a></b> ·
   <a href="#inicio-rápido">Inicio rápido</a> ·
   <a href="#cómo-funciona">Cómo funciona</a> ·
   <a href="#preguntas-frecuentes">FAQ</a>
@@ -43,15 +39,12 @@ de LATAM.
 ## Inicio rápido
 
 ```bash
-git clone https://github.com/Hainrixz/whatsapp-agentkit.git
-cd whatsapp-agentkit
-bash start.sh
+git clone https://github.com/COPS95/whatsapp-agent.git
+cd whatsapp-agent
 ```
 
-Después abre Claude Code y escribe el comando:
-
 ```bash
-claude
+bash start.sh
 # dentro de Claude Code:
 /build-agent
 ```
