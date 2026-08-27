@@ -198,6 +198,8 @@ agentkit/
 │   ├── brain.py           ← Orquesta: system prompt + historial → proveedor de IA
 │   ├── memory.py          ← SQLAlchemy: historial por teléfono + deduplicación de eventos
 │   ├── tools.py           ← Herramientas específicas del negocio del usuario
+│   ├── static/
+│   │   └── chat.html      ← Chat de prueba estilo WhatsApp, servido en /test
 │   ├── providers/
 │   │   ├── __init__.py    ← Factory: obtener_proveedor() según .env
 │   │   ├── base.py        ← Clase abstracta ProveedorWhatsApp
@@ -213,7 +215,7 @@ agentkit/
 │   └── .gitkeep
 ├── tests/
 │   ├── __init__.py
-│   └── test_local.py      ← Chat interactivo en terminal (simula WhatsApp)
+│   └── test_local.py      ← Chat en terminal (respaldo si no hay navegador a mano)
 ├── requirements.txt       ← Dependencias Python
 ├── Dockerfile             ← Imagen Docker para producción
 ├── docker-compose.yml     ← Orquestación con variables de entorno
@@ -273,6 +275,15 @@ segundos. Llamar a Claude tarda más que eso. Si el agente procesa antes de cont
 proveedor asume que el webhook falló y reintenta el mismo evento — hasta 7 veces — y el
 cliente termina recibiendo la misma respuesta repetida. Por eso: **responder primero,
 trabajar después**, y deduplicar por id de evento.
+
+**Sobre `agent/static/chat.html`.** Es la forma en la que el usuario prueba su agente en
+la Fase 4: una página que se ve y se comporta como WhatsApp, servida por el propio
+servidor en `/test`. Habla con `brain.py` y `memory.py` directo, sin pasar por
+`providers/` — no hay WhatsApp real de por medio, así que no consume nada de Zernio ni
+de Meta y funciona aunque el usuario todavía no haya elegido proveedor. Por eso las rutas
+`/test`, `/test/chat` y `/test/reset` se registran en `main.py` **solo si
+`ENVIRONMENT != "production"`**: en un deploy real no tiene sentido dejar un chat abierto
+con el agente, gastando créditos de la API a quien tenga la URL.
 
 ---
 
@@ -1107,10 +1118,12 @@ import logging
 import os
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse
+from pydantic import BaseModel
 
 from agent.brain import generar_respuesta, obtener_mensaje_error
 from agent.memory import (
@@ -1118,6 +1131,7 @@ from agent.memory import (
     inicializar_db,
     liberar_evento,
     limpiar_eventos_viejos,
+    limpiar_historial,
     marcar_evento_procesado,
     obtener_historial,
 )
@@ -1175,7 +1189,10 @@ async def lifespan(app: FastAPI):
         estado_proveedor = {"ok": ok, "detalle": detalle}
         logger.info(f"Conexion con el proveedor: {'OK' if ok else 'ERROR'} — {detalle}")
     else:
-        logger.error(f"Proveedor de WhatsApp NO configurado: {error_configuracion}")
+        logger.warning(
+            f"Proveedor de WhatsApp NO configurado: {error_configuracion}. "
+            "El agente funciona igual para pruebas en /test."
+        )
 
     yield
 
@@ -1187,7 +1204,9 @@ app = FastAPI(title="AgentKit — WhatsApp AI Agent", version="2.0.0", lifespan=
 async def health_check():
     """Endpoint de salud para Railway y monitoreo."""
     if error_configuracion:
-        return {"status": "error", "service": "agentkit", "detalle": error_configuracion}
+        # "degradado" y no "error": faltar el proveedor de WhatsApp es esperable
+        # mientras se prueba solo con /test, no es una falla del servidor.
+        return {"status": "degradado", "service": "agentkit", "detalle": error_configuracion}
 
     # Se responde 200 aunque las credenciales esten mal, para que Railway no marque el
     # deploy como caido y puedas leer el diagnostico. El detalle esta en el cuerpo.
@@ -1197,6 +1216,54 @@ async def health_check():
         "proveedor": proveedor.__class__.__name__ if proveedor else None,
         "conexion": estado_proveedor,
     }
+
+
+# ── Chat de prueba (solo en desarrollo) ─────────────────────────────────────
+#
+# Interfaz web estilo WhatsApp para probar el agente a mano antes de conectar un
+# proveedor real. Usa la misma logica que brain.py + memory.py, sin pasar por
+# providers/. Se registra SOLO si ENVIRONMENT != "production": no tiene sentido
+# dejar un chat libre con el agente expuesto en un deploy real, donde cualquiera
+# con la URL podria hablar con el y gastar creditos de la API.
+if ENVIRONMENT != "production":
+    RUTA_CHAT_HTML = Path(__file__).parent / "static" / "chat.html"
+
+    class MensajeTest(BaseModel):
+        telefono: str
+        mensaje: str
+
+    class ResetTest(BaseModel):
+        telefono: str
+
+    @app.get("/test")
+    async def test_chat_ui():
+        """Sirve la pagina de chat estilo WhatsApp para probar el agente a mano."""
+        return FileResponse(RUTA_CHAT_HTML)
+
+    @app.post("/test/chat")
+    async def test_chat(payload: MensajeTest):
+        """
+        Genera una respuesta para el chat de prueba, por HTTP en vez de por
+        WhatsApp. No pasa por providers/: no hay WhatsApp real de por medio.
+        """
+        mensaje = payload.mensaje.strip()
+        if not mensaje:
+            raise HTTPException(status_code=400, detail="El mensaje esta vacio")
+
+        historial = await obtener_historial(payload.telefono)
+        respuesta, es_respuesta_real = await generar_respuesta(mensaje, historial)
+
+        if es_respuesta_real:
+            await guardar_mensaje(payload.telefono, "user", mensaje)
+            await guardar_mensaje(payload.telefono, "assistant", respuesta)
+
+        return {"respuesta": respuesta}
+
+    @app.post("/test/reset")
+    async def test_reset(payload: ResetTest):
+        """Borra el historial de una sesion de prueba (boton 'Reiniciar chat')."""
+        await limpiar_historial(payload.telefono)
+        return {"status": "ok"}
 
 
 @app.get("/webhook")
@@ -2014,6 +2081,10 @@ Siempre incluir un archivo `agent/__init__.py` vacío y un `tests/__init__.py` v
 
 #### 3.15 — `tests/test_local.py`
 
+Respaldo de `agent/static/chat.html` (sección 3.16) para cuando el usuario no tiene
+navegador a mano, o prefiere probar por terminal. Siempre se genera igual, sin importar
+el proveedor elegido.
+
 ```python
 # tests/test_local.py — Simulador de chat en terminal
 # Generado por AgentKit
@@ -2095,7 +2166,332 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-#### 3.16 — Archivos de infraestructura
+#### 3.16 — `agent/static/chat.html`
+
+Siempre se genera, sin importar el proveedor de WhatsApp o de IA elegidos. Es una página
+autocontenida (sin dependencias externas) que imita la interfaz de WhatsApp y habla con
+las rutas `/test/chat` y `/test/reset` de `agent/main.py` (sección 3.7). Es el camino
+principal de la Fase 4: el usuario prueba su agente ahí, no por terminal.
+
+Reemplazá `[NOMBRE_AGENTE]` por el nombre real que el usuario eligió en la entrevista
+(Pregunta 4). Es lo único que cambia entre negocios: el resto de la página es genérico.
+
+```html
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AgentKit — Chat de prueba</title>
+<style>
+  :root {
+    --wa-verde-header: #008069;
+    --wa-verde-oscuro: #005c4b;
+    --wa-verde-burbuja: #d9fdd3;
+    --wa-fondo-chat: #efeae2;
+    --wa-gris-texto: #667781;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #0b141a;
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .telefono {
+    max-width: 460px;
+    height: 100vh;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    background: var(--wa-fondo-chat);
+    box-shadow: 0 0 40px rgba(0,0,0,0.4);
+  }
+  .cabecera {
+    background: var(--wa-verde-header);
+    color: white;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+  .avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: #ffffff33;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 16px;
+  }
+  .info-contacto { flex: 1; min-width: 0; }
+  .info-contacto .nombre { font-weight: 600; font-size: 16px; }
+  .info-contacto .estado { font-size: 12.5px; opacity: 0.85; }
+  .btn-reset {
+    background: transparent;
+    border: 1px solid #ffffff55;
+    color: white;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .btn-reset:hover { background: #ffffff22; }
+
+  .zona-mensajes {
+    flex: 1;
+    overflow-y: auto;
+    padding: 14px 8%;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background-image:
+      radial-gradient(circle at 20% 20%, #00000006 1px, transparent 1px),
+      radial-gradient(circle at 70% 60%, #00000006 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+  .burbuja {
+    max-width: 78%;
+    padding: 6px 9px 8px 9px;
+    border-radius: 8px;
+    font-size: 14.2px;
+    line-height: 1.35;
+    margin: 3px 0;
+    box-shadow: 0 1px 0.5px rgba(0,0,0,0.13);
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    position: relative;
+  }
+  .burbuja.agente {
+    background: #ffffff;
+    align-self: flex-start;
+    border-top-left-radius: 0;
+    color: #111b21;
+  }
+  .burbuja.usuario {
+    background: var(--wa-verde-burbuja);
+    align-self: flex-end;
+    border-top-right-radius: 0;
+    color: #111b21;
+  }
+  .hora {
+    display: block;
+    text-align: right;
+    font-size: 10.5px;
+    color: var(--wa-gris-texto);
+    margin-top: 2px;
+  }
+  .burbuja-sistema {
+    align-self: center;
+    background: #fff3cd;
+    color: #6b5900;
+    font-size: 12.5px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    margin: 8px 0;
+  }
+  .escribiendo {
+    align-self: flex-start;
+    background: #ffffff;
+    border-radius: 8px;
+    border-top-left-radius: 0;
+    padding: 10px 14px;
+    display: inline-flex;
+    gap: 4px;
+    margin: 3px 0;
+  }
+  .escribiendo span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #9aa4ab;
+    animation: parpadeo 1.2s infinite ease-in-out;
+  }
+  .escribiendo span:nth-child(2) { animation-delay: 0.2s; }
+  .escribiendo span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes parpadeo {
+    0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
+    30% { opacity: 1; transform: translateY(-2px); }
+  }
+
+  .zona-entrada {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: #f0f2f5;
+  }
+  .zona-entrada input {
+    flex: 1;
+    border: none;
+    outline: none;
+    border-radius: 20px;
+    padding: 10px 16px;
+    font-size: 14.5px;
+    background: white;
+  }
+  .btn-enviar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: none;
+    background: var(--wa-verde-header);
+    color: white;
+    font-size: 18px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .btn-enviar:disabled { opacity: 0.5; cursor: default; }
+  .btn-enviar:hover:not(:disabled) { background: var(--wa-verde-oscuro); }
+</style>
+</head>
+<body>
+
+<div class="telefono">
+  <div class="cabecera">
+    <div class="avatar" id="avatar-inicial">?</div>
+    <div class="info-contacto">
+      <div class="nombre" id="nombre-agente">Agente</div>
+      <div class="estado">Chat de prueba — AgentKit</div>
+    </div>
+    <button class="btn-reset" id="btn-reset" title="Borra el historial de esta sesion de prueba">Reiniciar chat</button>
+  </div>
+
+  <div class="zona-mensajes" id="zona-mensajes">
+    <div class="burbuja-sistema">Este chat prueba tu agente igual que WhatsApp, pero sin usar WhatsApp real. Nada de esto se envia a un cliente.</div>
+  </div>
+
+  <div class="zona-entrada">
+    <input id="input-mensaje" type="text" placeholder="Escribe un mensaje" autocomplete="off" />
+    <button class="btn-enviar" id="btn-enviar" title="Enviar">&#10148;</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  const zonaMensajes = document.getElementById("zona-mensajes");
+  const input = document.getElementById("input-mensaje");
+  const btnEnviar = document.getElementById("btn-enviar");
+  const btnReset = document.getElementById("btn-reset");
+  const nombreAgenteEl = document.getElementById("nombre-agente");
+  const avatarEl = document.getElementById("avatar-inicial");
+
+  // Nombre del agente: cosmetico para esta pagina de prueba. Si config/business.yaml
+  // cambia despues, esto queda desactualizado a proposito; no vale la pena leer YAML
+  // desde JS del lado del navegador solo para esto.
+  const NOMBRE_AGENTE = "[NOMBRE_AGENTE]";
+  nombreAgenteEl.textContent = NOMBRE_AGENTE;
+  avatarEl.textContent = NOMBRE_AGENTE.charAt(0).toUpperCase();
+
+  // Un telefono de prueba fijo por pestaña del navegador. Se guarda en sessionStorage
+  // (no localStorage) para que cada pestaña nueva arranque una conversacion limpia,
+  // pero recargar la misma pestaña no pierda el historial.
+  let telefono = sessionStorage.getItem("agentkit_telefono_test");
+  if (!telefono) {
+    telefono = "web-test-" + Math.random().toString(36).slice(2, 10);
+    sessionStorage.setItem("agentkit_telefono_test", telefono);
+  }
+
+  function horaActual() {
+    const d = new Date();
+    return d.getHours().toString().padStart(2, "0") + ":" + d.getMinutes().toString().padStart(2, "0");
+  }
+
+  function agregarBurbuja(texto, tipo) {
+    const burbuja = document.createElement("div");
+    burbuja.className = "burbuja " + tipo;
+    burbuja.textContent = texto;
+    const hora = document.createElement("span");
+    hora.className = "hora";
+    hora.textContent = horaActual();
+    burbuja.appendChild(hora);
+    zonaMensajes.appendChild(burbuja);
+    zonaMensajes.scrollTop = zonaMensajes.scrollHeight;
+    return burbuja;
+  }
+
+  function mostrarEscribiendo() {
+    const el = document.createElement("div");
+    el.className = "escribiendo";
+    el.id = "indicador-escribiendo";
+    el.innerHTML = "<span></span><span></span><span></span>";
+    zonaMensajes.appendChild(el);
+    zonaMensajes.scrollTop = zonaMensajes.scrollHeight;
+  }
+
+  function quitarEscribiendo() {
+    const el = document.getElementById("indicador-escribiendo");
+    if (el) el.remove();
+  }
+
+  async function enviarMensaje() {
+    const texto = input.value.trim();
+    if (!texto) return;
+
+    input.value = "";
+    btnEnviar.disabled = true;
+    agregarBurbuja(texto, "usuario");
+    mostrarEscribiendo();
+
+    try {
+      const r = await fetch("/test/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ telefono: telefono, mensaje: texto }),
+      });
+
+      quitarEscribiendo();
+
+      if (!r.ok) {
+        const detalle = await r.text();
+        agregarBurbuja("[Error " + r.status + "] " + detalle.slice(0, 200), "agente");
+        return;
+      }
+
+      const datos = await r.json();
+      agregarBurbuja(datos.respuesta, "agente");
+    } catch (err) {
+      quitarEscribiendo();
+      agregarBurbuja("[Error de red] No se pudo contactar al servidor: " + err.message, "agente");
+    } finally {
+      btnEnviar.disabled = false;
+      input.focus();
+    }
+  }
+
+  async function reiniciarChat() {
+    if (!confirm("¿Borrar el historial de esta sesion de prueba?")) return;
+    await fetch("/test/reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ telefono: telefono }),
+    });
+    zonaMensajes.innerHTML =
+      '<div class="burbuja-sistema">Historial borrado. Empieza una conversacion nueva.</div>';
+  }
+
+  btnEnviar.addEventListener("click", enviarMensaje);
+  btnReset.addEventListener("click", reiniciarChat);
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") enviarMensaje();
+  });
+
+  input.focus();
+})();
+</script>
+
+</body>
+</html>
+```
+
+#### 3.17 — Archivos de infraestructura
 
 **`.env` (generado, NUNCA va a GitHub):**
 
@@ -2225,7 +2621,7 @@ Las últimas líneas son para el caso de Cloudflare: el Worker y su configuraci�
 igual cuando el usuario despliega en Railway no molesta — esos archivos simplemente no
 existen.
 
-#### 3.17 — Archivos de `/knowledge`
+#### 3.18 — Archivos de `/knowledge`
 
 Si hay archivos en `/knowledge`, léelos (txt, pdf, csv, md, json, docx) y extrae el
 contenido relevante para incorporarlo textualmente en el system prompt de
@@ -2238,30 +2634,65 @@ Si un archivo es muy grande, prioriza lo que un cliente preguntaría por WhatsAp
 
 ### FASE 4 — Testing local
 
-1. **Ejecutar el simulador de chat:**
+Dos pasos, en este orden: primero un **pre-chequeo automático que corres vos** (Claude
+Code), sin que el usuario tenga que tocar nada; recién si eso responde bien, le entregás
+la **UI web** (`agent/static/chat.html`, sección 3.16) para que el usuario pruebe con sus
+propias manos. No tiene sentido pasarle una URL a un chat que todavía no sabés si
+funciona.
+
+1. **Pre-chequeo automático con `tests/test_local.py`, corrido por vos, no por el
+   usuario.** Mandale un mensaje de prueba por stdin y revisá que la respuesta tenga
+   sentido:
    ```bash
-   .venv/bin/python tests/test_local.py
+   printf 'Hola, ¿qué servicios ofrecen?\nsalir\n' | .venv/bin/python tests/test_local.py
    ```
+   Esto valida que `brain.py`, `memory.py` y el proveedor de IA elegido (Anthropic u
+   OpenRouter) están bien conectados — la parte que más frecuentemente falla por una key
+   mal copiada o un modelo mal escrito. Si falla, diagnosticá y arreglá antes de seguir;
+   no le muestres nada al usuario todavía.
 
-2. **El usuario escribe como si fuera un cliente** y ve las respuestas del agente.
-
-3. **Verificar que el servidor arranca** (en otra terminal, o después de salir del test):
+2. **Arranca el servidor en segundo plano** (no bloqueante: necesitas seguir hablando
+   con el usuario mientras el servidor sigue corriendo):
    ```bash
    .venv/bin/uvicorn agent.main:app --reload --port 8000
+   ```
+
+3. **Verifica que levantó bien** antes de pasarle la URL al usuario:
+   ```bash
    curl http://localhost:8000/
    ```
-   Tiene que responder `{"status":"ok","service":"agentkit","proveedor":"..."}`.
-   Si responde `{"status":"error"...}`, el `detalle` dice exactamente qué falta en el `.env`.
+   Tiene que responder `{"status":"ok"|"degradado","service":"agentkit",...}` — los dos
+   son un arranque válido. `"degradado"` con `detalle` mencionando `WHATSAPP_PROVIDER`
+   es exactamente lo esperable si el usuario todavía no eligió proveedor de WhatsApp: no
+   bloquea el testing, porque `/test` no pasa por `providers/`. Si el `curl` falla del
+   todo (sin respuesta, connection refused), ahí sí hay que diagnosticar antes de seguir.
 
-4. **Evaluar con el usuario:**
+4. **Recién ahora, dale la URL al usuario** — ya sabés que el pipeline funciona:
+   ```
+   Tu agente ya está corriendo. Pruébalo acá, como si fuera WhatsApp:
+
+   http://localhost:8000/test
+   ```
+   Esa página ya tiene el nombre del agente cargado y simula la interfaz de WhatsApp.
+   Cada mensaje que el usuario mande ahí pasa por el mismo `brain.py` y `memory.py` que
+   va a usar en producción — la única diferencia es que no sale por WhatsApp real.
+
+5. **Espera a que el usuario pruebe y te cuente cómo le fue.** No sigas de fase sin que
+   te confirme.
    ```
    ¿Tu agente responde como esperabas? (si/no)
    ```
 
-   - Si **NO**: Preguntar qué ajustar, modificar `config/prompts.yaml` y repetir
+   - Si **NO**: Preguntar qué ajustar, modificar `config/prompts.yaml` y decirle que
+     recargue la página `/test` (o pegue de nuevo la URL) para probar con el prompt
+     nuevo — el servidor con `--reload` ya recogió el cambio solo.
    - Si **SÍ**: Continuar a Fase 5
 
-5. **Mostrar mensaje:**
+6. **Si el usuario no tiene navegador a mano** (por ejemplo trabajando por SSH), el
+   mismo `tests/test_local.py` del paso 1 le sirve como chat interactivo — decíselo como
+   alternativa en vez de la UI.
+
+6. **Mostrar mensaje:**
    ```
    Fase 4 completada — Agente probado y aprobado
 

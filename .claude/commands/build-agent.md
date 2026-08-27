@@ -28,15 +28,20 @@ FASE 3 — Generación del agente
 - Genera agent/brain.py (Claude API)
 - Genera agent/memory.py (historial + tabla de eventos procesados)
 - Genera agent/tools.py (herramientas según caso de uso)
-- Genera tests/test_local.py (simulador de chat)
+- Genera agent/static/chat.html (chat de prueba estilo WhatsApp, con el nombre real del agente)
+- Genera tests/test_local.py (simulador de chat en terminal)
 - Genera Dockerfile, docker-compose.yml y .dockerignore
 - Configura .env con WHATSAPP_PROVIDER y las API keys del usuario
 
 FASE 4 — Testing local
-- Ejecuta python tests/test_local.py
-- El usuario chatea con su agente en la terminal
-- Verifica que el servidor arranca y que GET / responde status ok
-- Si hay ajustes, modifica prompts.yaml y repite
+- Pre-chequeo automático: corre tú mismo tests/test_local.py con un mensaje de prueba
+- Si falla, arréglalo antes de seguir — el usuario todavía no ve nada
+- Si pasa, arranca el servidor en segundo plano (uvicorn --reload)
+- Verifica GET / con curl: "ok" o "degradado" son arranques válidos
+- "degradado" por falta de WHATSAPP_PROVIDER no bloquea el testing
+- Dale al usuario la URL http://localhost:8000/test para que pruebe en el navegador
+- Si no tiene navegador, ofrece tests/test_local.py como alternativa
+- Si hay ajustes, modifica prompts.yaml y repite (el --reload recoge el cambio solo)
 - No avanza sin aprobación del usuario
 
 FASE 5 — Deploy a Railway
