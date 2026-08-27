@@ -33,7 +33,7 @@ Cuando generes el agente, SIEMPRE usa estas tecnologías:
 |-----------|-----------|-------|
 | Runtime | Python 3.11+ | Verificar en Fase 1 |
 | Servidor | FastAPI + Uvicorn | Webhook handler genérico |
-| IA | Anthropic Claude API / OpenRouter | El usuario elige durante el setup — ver 2.1 |
+| IA | OpenRouter / Anthropic Claude API | El usuario elige durante el setup — ver 2.1 |
 | WhatsApp | Zernio / Meta Cloud API | El usuario elige durante el setup |
 | Base de datos | SQLite (local) / PostgreSQL (prod) | Via SQLAlchemy |
 | Variables | python-dotenv | NUNCA hardcodear keys |
@@ -55,10 +55,10 @@ python-multipart>=0.0.20
 
 Agrega **una sola** línea más según el proveedor de IA elegido en la Fase 2:
 
-- Si eligió **Anthropic**: `anthropic>=0.122.0`
 - Si eligió **OpenRouter**: nada — el adaptador de OpenRouter habla HTTP directo con
   `httpx`, que ya está en la lista. No agregues el paquete `openai`: no hace falta y es
   una dependencia más para algo que un POST con `httpx` ya resuelve.
+- Si eligió **Anthropic**: `anthropic>=0.122.0`
 
 Dos dependencias que parecen opcionales y no lo son:
 
@@ -73,24 +73,10 @@ Dos dependencias que parecen opcionales y no lo son:
 ### 2.1 Proveedor de IA y modelo
 
 AgentKit soporta dos formas de hablar con el modelo. El usuario elige una en la Fase 2,
-con la variable `LLM_PROVIDER` (`anthropic` | `openrouter`). Igual que con WhatsApp:
+con la variable `LLM_PROVIDER` (`openrouter` | `anthropic`). Igual que con WhatsApp:
 **genera SOLO el adaptador del proveedor elegido**, no los dos.
 
-#### 2.1.1 Anthropic directo — recomendado
-
-El camino simple: hablas contra la API de Anthropic con el SDK oficial. El modelo se
-elige con `ANTHROPIC_MODEL`. Default: `claude-sonnet-5`.
-
-| Modelo | ID | Precio por millón de tokens | Cuándo usarlo |
-|---|---|---|---|
-| Claude Opus 5 | `claude-opus-5` | $5 entrada / $25 salida | El agente tiene que razonar sobre catálogos, agendas o reglas complicadas |
-| Claude Sonnet 5 | `claude-sonnet-5` | $3 / $15 | **Default.** El balance correcto para atención a clientes |
-| Claude Haiku 4.5 | `claude-haiku-4-5` | $1 / $5 | Solo preguntas frecuentes y respuestas cortas |
-
-Si el usuario no dice nada, usa el default. No cambies de modelo por tu cuenta para
-"ahorrar": es una decisión del dueño del negocio, no tuya.
-
-#### 2.1.2 OpenRouter — avanzado
+#### 2.1.1 OpenRouter — recomendado
 
 [OpenRouter](https://openrouter.ai) da acceso a Claude y a modelos de otros proveedores
 (GPT, Gemini, Llama, etc.) con una sola API key y un formato de API único — el mismo que
@@ -105,17 +91,34 @@ del cliente de Anthropic: arma su propio request con `httpx`.
 - Sin capa gratuita real para producción: hay que cargar créditos en
   Settings → Credits
 
-**El modelo NO tiene un default fijo en el código.** El ID cambia constantemente y tiene
-forma `proveedor/modelo` (ej. `anthropic/claude-sonnet-4.5`, `openai/gpt-4o-mini`,
-`google/gemini-2.5-flash`). En la Fase 2, cuando el usuario elija OpenRouter, confirma
-el slug exacto contra https://openrouter.ai/models antes de escribirlo en `OPENROUTER_MODEL`
-— no lo inventes de memoria, la lista cambia con frecuencia y un slug viejo tira 404.
+**El default es `openai/gpt-4.1-mini`.** Rápido y barato, buen balance para atención a
+clientes. En la Fase 2 no hace falta preguntarle al usuario qué modelo quiere: avísale
+que vas a usar ese por defecto (a menos que diga lo contrario) y solo pídele la API key.
+El ID de cualquier modelo tiene forma `proveedor/modelo` (ej. `anthropic/claude-sonnet-4.5`,
+`google/gemini-2.5-flash`) y cambia constantemente — si el usuario SÍ pide otro modelo,
+confirma el slug exacto contra https://openrouter.ai/models antes de escribirlo en
+`OPENROUTER_MODEL`, no lo inventes de memoria.
 
 OpenRouter unifica el parámetro de esfuerzo de razonamiento como `reasoning.effort`
 (`low` | `medium` | `high`) y lo traduce al mecanismo del modelo real por debajo. No todos
 los modelos lo soportan: si el modelo elegido lo ignora, OpenRouter no debería fallar por
 eso, pero si la llamada devuelve error apenas se manda `reasoning`, la salida es no
 mandarlo (dejar `OPENROUTER_EFFORT` vacío).
+
+#### 2.1.2 Anthropic directo — avanzado
+
+Hablas directo contra la API de Anthropic con el SDK oficial, sin pasar por OpenRouter.
+Sirve si el usuario ya tiene una cuenta de Anthropic o quiere el trato directo con el
+proveedor del modelo. El modelo se elige con `ANTHROPIC_MODEL`. Default: `claude-sonnet-5`.
+
+| Modelo | ID | Precio por millón de tokens | Cuándo usarlo |
+|---|---|---|---|
+| Claude Opus 5 | `claude-opus-5` | $5 entrada / $25 salida | El agente tiene que razonar sobre catálogos, agendas o reglas complicadas |
+| Claude Sonnet 5 | `claude-sonnet-5` | $3 / $15 | **Default.** El balance correcto para atención a clientes |
+| Claude Haiku 4.5 | `claude-haiku-4-5` | $1 / $5 | Solo preguntas frecuentes y respuestas cortas |
+
+Si el usuario no dice nada, usa el default. No cambies de modelo por tu cuenta para
+"ahorrar": es una decisión del dueño del negocio, no tuya.
 
 ---
 
@@ -391,20 +394,41 @@ PREGUNTA 7: ¿Tienes archivos con información de tu negocio?
 
 PREGUNTA 8: ¿Cómo quieres conectar la IA de tu agente?
 
-            1. Anthropic directo (RECOMENDADO)
-               Hablas directo con la API de Claude, con el SDK oficial. Es el camino más
-               simple y el que tiene mejor soporte en este sistema.
-
-            2. OpenRouter
+            1. OpenRouter (RECOMENDADO)
                Una sola API key te da acceso a Claude y a modelos de otros proveedores
-               (GPT, Gemini, Llama, etc.) bajo el mismo formato. Sirve si ya usás
-               OpenRouter en otros proyectos, o si querés poder cambiar de modelo sin
-               cambiar de proveedor. OpenRouter cobra una comisión chica sobre el precio
-               del modelo que elijas, y no tiene capa gratis real para producción.
+               (GPT, Gemini, Llama, etc.) bajo el mismo formato. Por defecto tu agente
+               usa `openai/gpt-4.1-mini`: rápido, barato y con buen balance para
+               atención a clientes — no tienes que elegir modelo si no quieres.
+               OpenRouter cobra una comisión chica sobre el precio del modelo, y no
+               tiene capa gratis real para producción.
 
-            Si solo quieres que tu agente use Claude, elige Anthropic directo.
+            2. Anthropic directo
+               Hablas directo con la API de Claude, con el SDK oficial, sin pasar por
+               OpenRouter. Sirve si ya tienes cuenta de Anthropic o prefieres el trato
+               directo con el proveedor del modelo.
+
+            Si no tienes preferencia, OpenRouter es el camino corto: ya viene con un
+            modelo por defecto listo para usar.
 
 PREGUNTA 9: [Depende de la respuesta de PREGUNTA 8]
+
+            Si eligió OPENROUTER:
+                Dile: "Voy a usar el modelo openai/gpt-4.1-mini por defecto (rápido y
+                barato, buen balance para atención a clientes). Si prefieres otro,
+                dímelo — si no, seguimos con este."
+
+                Y pide tu OpenRouter API Key (empieza con "sk-or-v1-").
+
+                No hace falta preguntar por el modelo: se lo estás informando, no
+                consultando. Solo si el usuario pide uno en particular, confirma el
+                slug exacto contra https://openrouter.ai/models antes de escribirlo en
+                el .env — no lo inventes de memoria, la lista cambia seguido.
+
+                Si NO tiene la key → Guiar paso a paso:
+                    1. Ve a openrouter.ai y crea tu cuenta
+                    2. Ve a Settings → API Keys → Create Key
+                    3. Cópiala AHORA: solo se muestra una vez
+                    4. Carga créditos en Settings → Credits (sin esto las llamadas fallan)
 
             Si eligió ANTHROPIC:
                 ¿Tienes tu Anthropic API Key?
@@ -415,20 +439,6 @@ PREGUNTA 9: [Depende de la respuesta de PREGUNTA 8]
                          3. Ve a Settings → API Keys
                          4. Crea una nueva key y cópiala
                          5. La key empieza con "sk-ant-..."
-
-            Si eligió OPENROUTER:
-                Necesito 2 datos:
-                1. Tu OpenRouter API Key (empieza con "sk-or-v1-")
-                2. Qué modelo quieres usar. Si no está seguro, ofrécele el equivalente a
-                   Claude Sonnet en OpenRouter como default razonable, pero confirma el
-                   slug exacto contra https://openrouter.ai/models antes de escribirlo en
-                   el .env — no lo inventes de memoria, la lista cambia seguido.
-
-                Si NO tiene la key → Guiar paso a paso:
-                    1. Ve a openrouter.ai y crea tu cuenta
-                    2. Ve a Settings → API Keys → Create Key
-                    3. Cópiala AHORA: solo se muestra una vez
-                    4. Carga créditos en Settings → Credits (sin esto las llamadas fallan)
 
 PREGUNTA 10: ¿Cómo quieres conectar tu agente con WhatsApp?
 
@@ -1541,9 +1551,12 @@ class ProveedorOpenRouter(ProveedorLLM):
 
     def __init__(self):
         self.api_key = os.getenv("OPENROUTER_API_KEY", "")
-        # Sin default: el slug cambia seguido y uno viejo tira 404. Se elige en la
-        # entrevista contra https://openrouter.ai/models, no se inventa aca.
-        self.modelo = os.getenv("OPENROUTER_MODEL", "").strip()
+        # Default: openai/gpt-4.1-mini — rapido y barato, buen balance para atencion a
+        # clientes. El "or" y no el default de os.getenv: una variable declarada vacia
+        # en el .env devuelve "" y dejaria al agente sin modelo. Si el usuario quiere
+        # otro, se confirma el slug exacto contra https://openrouter.ai/models: la
+        # lista cambia seguido y un slug viejo tira 404.
+        self.modelo = (os.getenv("OPENROUTER_MODEL") or "openai/gpt-4.1-mini").strip()
         # OpenRouter unifica el esfuerzo de razonamiento entre proveedores.
         # Dejalo vacio en el .env para no mandar el parametro.
         self.esfuerzo = os.getenv("OPENROUTER_EFFORT", "low").strip()
@@ -1555,17 +1568,10 @@ class ProveedorOpenRouter(ProveedorLLM):
 
         if not self.api_key:
             logger.warning("OPENROUTER_API_KEY no esta configurada: el agente no va a poder responder")
-        if not self.modelo:
-            logger.warning(
-                "OPENROUTER_MODEL no esta configurado: el agente no va a poder responder. "
-                "Elegi un modelo en https://openrouter.ai/models"
-            )
 
     async def generar(self, system_prompt: str, mensajes: list[dict]) -> str:
         if not self.api_key:
             raise ErrorLLM("Falta OPENROUTER_API_KEY")
-        if not self.modelo:
-            raise ErrorLLM("Falta OPENROUTER_MODEL")
 
         cuerpo = {
             "model": self.modelo,
@@ -2101,25 +2107,25 @@ Las del proveedor que NO se eligió no van, ni comentadas.
 # Generado por AgentKit — NO subir a GitHub
 
 # ── Proveedor de IA ────────────────────────────────────────
-LLM_PROVIDER=anthropic
-
-# ── Si LLM_PROVIDER=anthropic ──────────────────────────────
-ANTHROPIC_API_KEY=sk-ant-...
-# claude-opus-5 | claude-sonnet-5 | claude-haiku-4-5
-ANTHROPIC_MODEL=claude-sonnet-5
-# Esfuerzo de razonamiento: low | medium | high. Vacio = no enviar el parametro.
-ANTHROPIC_EFFORT=low
-# Opcional, default 4096. El razonamiento interno cuenta contra este tope.
-# ANTHROPIC_MAX_TOKENS=4096
+LLM_PROVIDER=openrouter
 
 # ── Si LLM_PROVIDER=openrouter ─────────────────────────────
-# OPENROUTER_API_KEY=sk-or-v1-...
-# Slug exacto de https://openrouter.ai/models, ej: anthropic/claude-sonnet-4.5
-# OPENROUTER_MODEL=
+OPENROUTER_API_KEY=sk-or-v1-...
+# Slug exacto de https://openrouter.ai/models. Default: openai/gpt-4.1-mini
+OPENROUTER_MODEL=openai/gpt-4.1-mini
 # Esfuerzo de razonamiento: low | medium | high. Vacio = no enviar el parametro.
-# OPENROUTER_EFFORT=low
+OPENROUTER_EFFORT=low
 # Opcional, default 4096.
 # OPENROUTER_MAX_TOKENS=4096
+
+# ── Si LLM_PROVIDER=anthropic ──────────────────────────────
+# ANTHROPIC_API_KEY=sk-ant-...
+# claude-opus-5 | claude-sonnet-5 | claude-haiku-4-5
+# ANTHROPIC_MODEL=claude-sonnet-5
+# Esfuerzo de razonamiento: low | medium | high. Vacio = no enviar el parametro.
+# ANTHROPIC_EFFORT=low
+# Opcional, default 4096. El razonamiento interno cuenta contra este tope.
+# ANTHROPIC_MAX_TOKENS=4096
 
 # ── Proveedor de WhatsApp ──────────────────────────────────
 WHATSAPP_PROVIDER=zernio
@@ -2387,7 +2393,7 @@ Solo ejecutar si el usuario confirma que quiere hacer deploy.
 
    Paso 3: Variables de entorno
       En Railway → tu proyecto → Variables, agrega:
-      - LLM_PROVIDER        = [anthropic | openrouter]
+      - LLM_PROVIDER        = [openrouter | anthropic]
       - WHATSAPP_PROVIDER   = [zernio | meta]
       - ENVIRONMENT         = production
       - DATABASE_URL        = ${{Postgres.DATABASE_URL}}
@@ -2580,7 +2586,7 @@ Solo ejecutar si el usuario confirma que quiere hacer deploy.
      ],
      "vars": {
        "ENVIRONMENT": "production",
-       "LLM_PROVIDER": "anthropic",
+       "LLM_PROVIDER": "openrouter",
        "WHATSAPP_PROVIDER": "zernio"
      }
    }
@@ -2770,21 +2776,21 @@ python3 scripts/audit.py
 ## 8. Variables de entorno
 
 ```env
-# ── Proveedor de IA (anthropic | openrouter) ──────────────
+# ── Proveedor de IA (openrouter | anthropic) ──────────────
 LLM_PROVIDER=
+
+# ── OpenRouter (si LLM_PROVIDER=openrouter) ───────────────
+OPENROUTER_API_KEY=sk-or-v1-...
+OPENROUTER_MODEL=openai/gpt-4.1-mini # slug de https://openrouter.ai/models, default openai/gpt-4.1-mini
+OPENROUTER_EFFORT=low               # low | medium | high — vacio para no enviarlo
+# OPENROUTER_MAX_TOKENS=4096        # opcional, default 4096
+# OPENROUTER_BASE_URL=              # opcional, default https://openrouter.ai/api/v1
 
 # ── Anthropic (si LLM_PROVIDER=anthropic) ─────────────────
 ANTHROPIC_API_KEY=sk-ant-...
 ANTHROPIC_MODEL=claude-sonnet-5     # claude-opus-5 | claude-sonnet-5 | claude-haiku-4-5
 ANTHROPIC_EFFORT=low                # low | medium | high — vacio para no enviarlo
 # ANTHROPIC_MAX_TOKENS=4096         # opcional, default 4096
-
-# ── OpenRouter (si LLM_PROVIDER=openrouter) ───────────────
-OPENROUTER_API_KEY=sk-or-v1-...
-OPENROUTER_MODEL=                   # slug de https://openrouter.ai/models, sin default
-OPENROUTER_EFFORT=low               # low | medium | high — vacio para no enviarlo
-# OPENROUTER_MAX_TOKENS=4096        # opcional, default 4096
-# OPENROUTER_BASE_URL=              # opcional, default https://openrouter.ai/api/v1
 
 # ── Proveedor de WhatsApp (zernio | meta) ─────────────────
 WHATSAPP_PROVIDER=
