@@ -12,27 +12,30 @@ echo ""
 echo "  Preparando tu entorno para construir tu agente de IA..."
 echo ""
 
-# ── Verificar Python ──────────────────────────────────────────
-echo "  [1/4] Verificando Python..."
-if ! command -v python3 &> /dev/null; then
+# ── Preparar Python 3.11 con uv ───────────────────────────────
+# Usamos uv en vez de depender del python3 del sistema: instala su propia copia
+# de Python 3.11 (no importa que version tengas instalada, o si no tienes ninguna)
+# y crea un entorno virtual aislado. Esto evita el error "externally-managed-environment"
+# que tira pip al instalar contra el Python global en macOS (Homebrew) y Linux recientes.
+echo "  [1/4] Preparando Python 3.11 con uv..."
+if ! command -v uv &> /dev/null; then
     echo ""
-    echo "  ERROR: Python 3 no encontrado."
-    echo "  Descargalo en: https://python.org/downloads"
+    echo "  ERROR: uv no esta instalado."
+    echo "  uv es el gestor que instala Python 3.11 y prepara el entorno virtual"
+    echo "  del agente, sin que tengas que instalar nada de Python a mano."
+    echo ""
+    echo "  Instalalo con:"
+    echo "    curl -LsSf https://astral.sh/uv/install.sh | sh"
+    echo ""
+    echo "  Despues cierra y abre tu terminal (o corre 'source ~/.zshrc' /"
+    echo "  'source ~/.bashrc') y vuelve a correr: bash start.sh"
     echo ""
     exit 1
 fi
 
-PYTHON_MAJOR=$(python3 -c 'import sys; print(sys.version_info.major)')
-PYTHON_MINOR=$(python3 -c 'import sys; print(sys.version_info.minor)')
-if [ "$PYTHON_MAJOR" -lt 3 ] || { [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 11 ]; }; then
-    echo ""
-    echo "  ERROR: Necesitas Python 3.11 o superior."
-    echo "  Version actual: $(python3 --version)"
-    echo "  Descarga la ultima version en: https://python.org/downloads"
-    echo ""
-    exit 1
-fi
-echo "  OK — $(python3 --version)"
+uv python install 3.11
+uv venv --python 3.11 .venv
+echo "  OK — $(.venv/bin/python --version) (entorno virtual en .venv/)"
 
 # ── Verificar Claude Code ────────────────────────────────────
 echo "  [2/4] Verificando Claude Code..."
@@ -70,8 +73,9 @@ fi
 echo ""
 echo "==========================================================="
 echo ""
-echo "  Todo listo. Ahora abre Claude Code:"
+echo "  Todo listo. Activa el entorno virtual y abre Claude Code:"
 echo ""
+echo "    source .venv/bin/activate"
 echo "    claude"
 echo ""
 echo "  Y escribe:"

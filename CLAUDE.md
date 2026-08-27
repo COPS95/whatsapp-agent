@@ -33,18 +33,17 @@ Cuando generes el agente, SIEMPRE usa estas tecnologías:
 |-----------|-----------|-------|
 | Runtime | Python 3.11+ | Verificar en Fase 1 |
 | Servidor | FastAPI + Uvicorn | Webhook handler genérico |
-| IA | Anthropic Claude API | Modelo default: `claude-sonnet-5` (configurable) |
+| IA | Anthropic Claude API / OpenRouter | El usuario elige durante el setup — ver 2.1 |
 | WhatsApp | Zernio / Meta Cloud API | El usuario elige durante el setup |
 | Base de datos | SQLite (local) / PostgreSQL (prod) | Via SQLAlchemy |
 | Variables | python-dotenv | NUNCA hardcodear keys |
 | Contenedores | Docker Compose | Para producción |
-| Deploy | Railway | Conectas el repo de GitHub y Railway lo levanta |
+| Deploy | Railway / Cloudflare Containers | El usuario elige en la Fase 5 — ver 5B |
 
 **Dependencias Python (requirements.txt):**
 ```
 fastapi>=0.141.0
 uvicorn[standard]>=0.52.0
-anthropic>=0.122.0
 httpx>=0.28.0
 python-dotenv>=1.2.0
 sqlalchemy[asyncio]>=2.0.52
@@ -53,6 +52,13 @@ aiosqlite>=0.22.0
 asyncpg>=0.31.0
 python-multipart>=0.0.20
 ```
+
+Agrega **una sola** línea más según el proveedor de IA elegido en la Fase 2:
+
+- Si eligió **Anthropic**: `anthropic>=0.122.0`
+- Si eligió **OpenRouter**: nada — el adaptador de OpenRouter habla HTTP directo con
+  `httpx`, que ya está en la lista. No agregues el paquete `openai`: no hace falta y es
+  una dependencia más para algo que un POST con `httpx` ya resuelve.
 
 Dos dependencias que parecen opcionales y no lo son:
 
@@ -64,9 +70,16 @@ Dos dependencias que parecen opcionales y no lo son:
   Railway, `memory.py` reescribe la URL a `postgresql+asyncpg://` y sin ese paquete el
   agente no arranca.
 
-### 2.1 Modelo de Claude
+### 2.1 Proveedor de IA y modelo
 
-El modelo se elige con la variable `ANTHROPIC_MODEL`. Default: `claude-sonnet-5`.
+AgentKit soporta dos formas de hablar con el modelo. El usuario elige una en la Fase 2,
+con la variable `LLM_PROVIDER` (`anthropic` | `openrouter`). Igual que con WhatsApp:
+**genera SOLO el adaptador del proveedor elegido**, no los dos.
+
+#### 2.1.1 Anthropic directo — recomendado
+
+El camino simple: hablas contra la API de Anthropic con el SDK oficial. El modelo se
+elige con `ANTHROPIC_MODEL`. Default: `claude-sonnet-5`.
 
 | Modelo | ID | Precio por millón de tokens | Cuándo usarlo |
 |---|---|---|---|
@@ -76,6 +89,33 @@ El modelo se elige con la variable `ANTHROPIC_MODEL`. Default: `claude-sonnet-5`
 
 Si el usuario no dice nada, usa el default. No cambies de modelo por tu cuenta para
 "ahorrar": es una decisión del dueño del negocio, no tuya.
+
+#### 2.1.2 OpenRouter — avanzado
+
+[OpenRouter](https://openrouter.ai) da acceso a Claude y a modelos de otros proveedores
+(GPT, Gemini, Llama, etc.) con una sola API key y un formato de API único — el mismo que
+usa OpenAI (`chat/completions`), no el de Anthropic. Por eso el adaptador no reusa nada
+del cliente de Anthropic: arma su propio request con `httpx`.
+
+- Documentación: https://openrouter.ai/docs
+- Base URL de la API: `https://openrouter.ai/api/v1`
+- Autenticación: `Authorization: Bearer sk-or-v1-...`
+- Lista de modelos y precio de cada uno (varían por modelo, y OpenRouter agrega una
+  comisión chica sobre el precio del proveedor de base): https://openrouter.ai/models
+- Sin capa gratuita real para producción: hay que cargar créditos en
+  Settings → Credits
+
+**El modelo NO tiene un default fijo en el código.** El ID cambia constantemente y tiene
+forma `proveedor/modelo` (ej. `anthropic/claude-sonnet-4.5`, `openai/gpt-4o-mini`,
+`google/gemini-2.5-flash`). En la Fase 2, cuando el usuario elija OpenRouter, confirma
+el slug exacto contra https://openrouter.ai/models antes de escribirlo en `OPENROUTER_MODEL`
+— no lo inventes de memoria, la lista cambia con frecuencia y un slug viejo tira 404.
+
+OpenRouter unifica el parámetro de esfuerzo de razonamiento como `reasoning.effort`
+(`low` | `medium` | `high`) y lo traduce al mecanismo del modelo real por debajo. No todos
+los modelos lo soportan: si el modelo elegido lo ignora, OpenRouter no debería fallar por
+eso, pero si la llamada devuelve error apenas se manda `reasoning`, la salida es no
+mandarlo (dejar `OPENROUTER_EFFORT` vacío).
 
 ---
 
@@ -152,13 +192,17 @@ agentkit/
 ├── agent/
 │   ├── __init__.py        ← Package init
 │   ├── main.py            ← FastAPI app + webhook (agnóstico del proveedor)
-│   ├── brain.py           ← Conexión Claude API + system prompt desde prompts.yaml
+│   ├── brain.py           ← Orquesta: system prompt + historial → proveedor de IA
 │   ├── memory.py          ← SQLAlchemy: historial por teléfono + deduplicación de eventos
 │   ├── tools.py           ← Herramientas específicas del negocio del usuario
-│   └── providers/
-│       ├── __init__.py    ← Factory: obtener_proveedor() según .env
-│       ├── base.py        ← Clase abstracta ProveedorWhatsApp
-│       └── zernio.py      ← Adaptador del proveedor elegido (o meta.py)
+│   ├── providers/
+│   │   ├── __init__.py    ← Factory: obtener_proveedor() según .env
+│   │   ├── base.py        ← Clase abstracta ProveedorWhatsApp
+│   │   └── zernio.py      ← Adaptador del proveedor elegido (o meta.py)
+│   └── llm/
+│       ├── __init__.py    ← Factory: obtener_proveedor_llm() según .env
+│       ├── base.py        ← Clase abstracta ProveedorLLM
+│       └── anthropic_provider.py  ← Adaptador del proveedor elegido (o openrouter_provider.py)
 ├── config/
 │   ├── business.yaml      ← Datos del negocio (generado en la entrevista)
 │   └── prompts.yaml       ← System prompt del agente (generado, poderoso y específico)
@@ -172,6 +216,16 @@ agentkit/
 ├── docker-compose.yml     ← Orquestación con variables de entorno
 ├── .dockerignore          ← Qué no entra a la imagen
 └── .env                   ← API keys del usuario (NUNCA va a GitHub)
+```
+
+Si el usuario elige desplegar en **Cloudflare Containers** (Fase 5B), se agregan tres
+archivos más. El código Python no cambia: en Cloudflare el container no recibe tráfico
+directo, hay un Worker delante que le reenvía las peticiones.
+
+```
+├── worker/index.js        ← Worker: puerta de entrada, reenvía al container
+├── wrangler.jsonc         ← Config de Cloudflare (imagen, binding, migración)
+└── package.json           ← @cloudflare/containers + wrangler
 ```
 
 ### Flujo de un mensaje
@@ -191,7 +245,9 @@ main.py — responde 200 AHORA y encola el trabajo en segundo plano
     ↓ ─────────────── (fuera del ciclo del webhook) ───────────────
 memory.py — recupera el historial de esa conversación
     ↓
-brain.py — llama a Claude con system prompt + historial + mensaje nuevo
+brain.py — arma system prompt + historial + mensaje nuevo
+    ↓
+llm/ — se lo manda al proveedor de IA elegido (Anthropic u OpenRouter)
     ↓
 providers/ — envía la respuesta por el proveedor elegido
     ↓
@@ -244,11 +300,29 @@ Antes de empezar, dejame verificar que tu entorno esta listo...
 
 **Verificaciones:**
 
-1. **Python >= 3.11**: Ejecutar `python3 --version`. Si no existe o es menor a 3.11, mostrar:
+1. **Entorno virtual (`.venv/`)**: `start.sh` ya lo crea con `uv` antes de que el usuario
+   abra Claude Code, así que lo normal es encontrarlo. Verifica con:
+   ```bash
+   .venv/bin/python --version
    ```
-   Necesitas Python 3.11 o superior.
-   Descargalo en: https://python.org/downloads
+   Si la carpeta `.venv/` no existe (el usuario corrió `claude` directo, sin pasar por
+   `start.sh`), créala vos mismo en vez de trabarte ahí:
+   ```bash
+   uv python install 3.11
+   uv venv --python 3.11 .venv
    ```
+   Si `uv` tampoco está instalado, mostrar:
+   ```
+   Necesitas uv para preparar el entorno de Python.
+   Instalalo con: curl -LsSf https://astral.sh/uv/install.sh | sh
+   Despues volve a intentarlo.
+   ```
+
+   A partir de acá, **todo comando de Python de este proyecto usa el intérprete del
+   entorno virtual**, nunca `python3`/`pip` a secas: `.venv/bin/python`,
+   `.venv/bin/uvicorn`, y `uv pip install ...` para instalar paquetes. `uv venv` crea el
+   entorno sin pip preinstalado (lo hace liviano a propósito): `uv pip install` es lo que
+   instala paquetes ahí, detectando el `.venv/` de la carpeta actual solo.
 
 2. **Crear carpetas necesarias** (si no existen):
    ```bash
@@ -259,7 +333,7 @@ Antes de empezar, dejame verificar que tu entorno esta listo...
 
 4. **Instalar dependencias**:
    ```bash
-   pip install -r requirements.txt
+   uv pip install -r requirements.txt
    ```
 
 5. **Crear .env desde template** si no existe:
@@ -315,16 +389,48 @@ PREGUNTA 7: ¿Tienes archivos con información de tu negocio?
                      Acepto: PDF, TXT, DOCX, CSV, imágenes, JSON, Markdown
             Si NO → Continuamos con lo que me has contado
 
-PREGUNTA 8: ¿Tienes tu Anthropic API Key?
-            Si SÍ → "Compártela, la guardaré de forma segura en tu .env"
-            Si NO → Guiar paso a paso:
-                     1. Ve a platform.anthropic.com
-                     2. Crea una cuenta o inicia sesión
-                     3. Ve a Settings → API Keys
-                     4. Crea una nueva key y cópiala
-                     5. La key empieza con "sk-ant-..."
+PREGUNTA 8: ¿Cómo quieres conectar la IA de tu agente?
 
-PREGUNTA 9: ¿Cómo quieres conectar tu agente con WhatsApp?
+            1. Anthropic directo (RECOMENDADO)
+               Hablas directo con la API de Claude, con el SDK oficial. Es el camino más
+               simple y el que tiene mejor soporte en este sistema.
+
+            2. OpenRouter
+               Una sola API key te da acceso a Claude y a modelos de otros proveedores
+               (GPT, Gemini, Llama, etc.) bajo el mismo formato. Sirve si ya usás
+               OpenRouter en otros proyectos, o si querés poder cambiar de modelo sin
+               cambiar de proveedor. OpenRouter cobra una comisión chica sobre el precio
+               del modelo que elijas, y no tiene capa gratis real para producción.
+
+            Si solo quieres que tu agente use Claude, elige Anthropic directo.
+
+PREGUNTA 9: [Depende de la respuesta de PREGUNTA 8]
+
+            Si eligió ANTHROPIC:
+                ¿Tienes tu Anthropic API Key?
+                Si SÍ → "Compártela, la guardaré de forma segura en tu .env"
+                Si NO → Guiar paso a paso:
+                         1. Ve a platform.anthropic.com
+                         2. Crea una cuenta o inicia sesión
+                         3. Ve a Settings → API Keys
+                         4. Crea una nueva key y cópiala
+                         5. La key empieza con "sk-ant-..."
+
+            Si eligió OPENROUTER:
+                Necesito 2 datos:
+                1. Tu OpenRouter API Key (empieza con "sk-or-v1-")
+                2. Qué modelo quieres usar. Si no está seguro, ofrécele el equivalente a
+                   Claude Sonnet en OpenRouter como default razonable, pero confirma el
+                   slug exacto contra https://openrouter.ai/models antes de escribirlo en
+                   el .env — no lo inventes de memoria, la lista cambia seguido.
+
+                Si NO tiene la key → Guiar paso a paso:
+                    1. Ve a openrouter.ai y crea tu cuenta
+                    2. Ve a Settings → API Keys → Create Key
+                    3. Cópiala AHORA: solo se muestra una vez
+                    4. Carga créditos en Settings → Credits (sin esto las llamadas fallan)
+
+PREGUNTA 10: ¿Cómo quieres conectar tu agente con WhatsApp?
 
             1. Zernio (RECOMENDADO)
                Corre sobre la WhatsApp Cloud API de Meta y te resuelve la conexión de tu
@@ -339,7 +445,7 @@ PREGUNTA 9: ¿Cómo quieres conectar tu agente con WhatsApp?
 
             Si solo quieres ver el agente funcionando rápido, Zernio es el camino corto.
 
-PREGUNTA 10: [Depende de la respuesta de PREGUNTA 9]
+PREGUNTA 11: [Depende de la respuesta de PREGUNTA 10]
 
             Si eligió ZERNIO:
                 Necesito 2 datos de tu cuenta de Zernio:
@@ -1189,49 +1295,364 @@ async def procesar_mensaje(msg: MensajeEntrante):
                 logger.error("Tampoco se pudo avisarle al cliente del error")
 ```
 
-#### 3.8 — `agent/brain.py`
+#### 3.8 — `agent/llm/base.py` (siempre se genera)
 
 ```python
-# agent/brain.py — Cerebro del agente: conexion con Claude
+# agent/llm/base.py — Clase base para proveedores de IA
 # Generado por AgentKit
 
 """
-Logica de IA del agente. Lee el system prompt de config/prompts.yaml y genera las
-respuestas con la API de Anthropic.
+Define la interfaz comun que todos los proveedores de IA implementan.
+Gracias a esto, brain.py no sabe ni le importa si la respuesta vino de
+Anthropic o de OpenRouter.
+"""
+
+from abc import ABC, abstractmethod
+
+
+class ErrorLLM(Exception):
+    """El proveedor de IA no pudo generar una respuesta (red, autenticacion, rate limit...)."""
+
+
+class ProveedorLLM(ABC):
+    """Interfaz que cada proveedor de IA debe implementar."""
+
+    @abstractmethod
+    async def generar(self, system_prompt: str, mensajes: list[dict]) -> str:
+        """
+        Genera una respuesta de texto.
+
+        Args:
+            system_prompt: quien es el agente y que sabe del negocio.
+            mensajes: historial + mensaje nuevo, [{"role": "user"|"assistant", "content": "..."}]
+
+        Returns:
+            El texto de la respuesta, o "" si el modelo no genero texto util (brain.py
+            lo trata como un caso de "no entendi", distinto de un error de la llamada).
+
+        Raises:
+            ErrorLLM: si la llamada en si fallo.
+        """
+        ...
+```
+
+#### 3.9 — `agent/llm/__init__.py` (siempre se genera)
+
+```python
+# agent/llm/__init__.py — Factory de proveedores de IA
+# Generado por AgentKit
+
+"""
+Elige el proveedor de IA segun la variable LLM_PROVIDER del .env.
+"""
+
+import os
+
+from agent.llm.base import ErrorLLM, ProveedorLLM
+
+PROVEEDORES_SOPORTADOS = ("anthropic", "openrouter")
+
+
+def obtener_proveedor_llm() -> ProveedorLLM:
+    """
+    Retorna el proveedor de IA configurado en .env.
+
+    Igual que agent/providers/obtener_proveedor(): esto NO se ejecuta al importar el
+    modulo. Si la configuracion esta mal, el servidor igual tiene que arrancar y
+    contarlo en el health check, en vez de morirse en el import.
+    """
+    proveedor = os.getenv("LLM_PROVIDER", "").strip().lower()
+
+    if not proveedor:
+        raise ValueError(
+            "LLM_PROVIDER no esta configurado en el .env. "
+            f"Valores validos: {' | '.join(PROVEEDORES_SOPORTADOS)}"
+        )
+
+    if proveedor == "anthropic":
+        from agent.llm.anthropic_provider import ProveedorAnthropic
+
+        return ProveedorAnthropic()
+
+    if proveedor == "openrouter":
+        from agent.llm.openrouter_provider import ProveedorOpenRouter
+
+        return ProveedorOpenRouter()
+
+    raise ValueError(
+        f"Proveedor de IA no soportado: '{proveedor}'. "
+        f"Valores validos: {' | '.join(PROVEEDORES_SOPORTADOS)}"
+    )
+
+
+__all__ = ["ErrorLLM", "ProveedorLLM", "PROVEEDORES_SOPORTADOS", "obtener_proveedor_llm"]
+```
+
+#### 3.10 — `agent/llm/anthropic_provider.py` (si eligió Anthropic)
+
+```python
+# agent/llm/anthropic_provider.py — Adaptador para la API de Anthropic
+# Generado por AgentKit
+
+"""
+Habla directo con la API de Claude usando el SDK oficial.
 """
 
 import logging
 import os
 
-import yaml
 from anthropic import AsyncAnthropic
+
+from agent.llm.base import ErrorLLM, ProveedorLLM
+
+logger = logging.getLogger("agentkit")
+
+
+class ProveedorAnthropic(ProveedorLLM):
+    """Proveedor de IA usando la API de Anthropic directamente."""
+
+    def __init__(self):
+        self.client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+        # El "or" y no el default de os.getenv: una variable declarada vacia en el .env
+        # devuelve "" y dejaria al agente sin modelo.
+        #   claude-opus-5     el mas capaz             $5 / $25 por millon de tokens
+        #   claude-sonnet-5   el balanceado (default)  $3 / $15
+        #   claude-haiku-4-5  el mas barato y rapido   $1 / $5
+        self.modelo = os.getenv("ANTHROPIC_MODEL") or "claude-sonnet-5"
+
+        # Es un bot de respuestas cortas: con esfuerzo bajo contesta mas rapido y mas barato.
+        # Dejalo vacio en el .env para no mandar el parametro.
+        self.esfuerzo = os.getenv("ANTHROPIC_EFFORT", "low").strip()
+
+        # WhatsApp son mensajes cortos, pero este tope NO es solo la respuesta: en los
+        # modelos actuales el razonamiento interno tambien cuenta contra el. Con el margen
+        # justo, una pregunta que exija pensar un poco deja al agente sin espacio para
+        # contestar.
+        self.max_tokens = int(os.getenv("ANTHROPIC_MAX_TOKENS") or "4096")
+
+        # Los modelos mas viejos no aceptan output_config. Si la primera llamada falla
+        # por eso, se reintenta sin el parametro y se recuerda para las siguientes.
+        self._soporta_esfuerzo = True
+
+    @staticmethod
+    def _extraer_texto(respuesta) -> str:
+        """
+        Junta el texto de la respuesta.
+
+        Ojo: NO se puede hacer respuesta.content[0].text. La respuesta es una lista de
+        bloques y el primero no siempre es texto (los modelos que razonan devuelven
+        primero un bloque de pensamiento). Hay que filtrar por tipo.
+        """
+        partes = [bloque.text for bloque in respuesta.content if bloque.type == "text"]
+        return "\n".join(p for p in partes if p).strip()
+
+    @staticmethod
+    def _es_error_de_esfuerzo(error: Exception) -> bool:
+        """
+        True solo si el modelo rechazo la llamada POR el parametro output_config/effort.
+
+        Se exige que sea un 400 de peticion invalida y no cualquier error que mencione la
+        palabra: un 529 de sobrecarga que la nombre de paso no debe apagar el parametro
+        para todo el proceso.
+        """
+        if getattr(error, "status_code", None) != 400:
+            return False
+        texto = str(error).lower()
+        return "output_config" in texto or "effort" in texto
+
+    async def generar(self, system_prompt: str, mensajes: list[dict]) -> str:
+        extras = (
+            {"output_config": {"effort": self.esfuerzo}}
+            if (self._soporta_esfuerzo and self.esfuerzo)
+            else {}
+        )
+
+        async def _llamar(parametros_extra: dict):
+            return await self.client.messages.create(
+                model=self.modelo,
+                max_tokens=self.max_tokens,
+                system=system_prompt,
+                messages=mensajes,
+                **parametros_extra,
+            )
+
+        try:
+            respuesta = await _llamar(extras)
+        except Exception as e:  # noqa: BLE001
+            if extras and self._es_error_de_esfuerzo(e):
+                logger.warning(
+                    f"El modelo {self.modelo} no acepta output_config.effort; "
+                    "se reintenta sin ese parametro."
+                )
+                self._soporta_esfuerzo = False
+                try:
+                    respuesta = await _llamar({})
+                except Exception as e2:  # noqa: BLE001
+                    raise ErrorLLM(str(e2)) from e2
+            else:
+                raise ErrorLLM(str(e)) from e
+
+        if getattr(respuesta, "stop_reason", None) == "max_tokens":
+            logger.warning(
+                f"La respuesta se corto por llegar al tope de {self.max_tokens} tokens. "
+                "Si pasa seguido, sube ANTHROPIC_MAX_TOKENS o acorta el system prompt."
+            )
+
+        texto = self._extraer_texto(respuesta)
+        if not texto:
+            logger.warning("Claude devolvio una respuesta sin texto")
+            return ""
+
+        logger.info(
+            f"Respuesta generada con {self.modelo} "
+            f"({respuesta.usage.input_tokens} in / {respuesta.usage.output_tokens} out)"
+        )
+        return texto
+```
+
+#### 3.11 — `agent/llm/openrouter_provider.py` (si eligió OpenRouter)
+
+```python
+# agent/llm/openrouter_provider.py — Adaptador para OpenRouter
+# Generado por AgentKit
+
+"""
+OpenRouter habla el formato de OpenAI (chat/completions), no el de Anthropic: por eso
+este adaptador arma su propio request con httpx en vez de reusar el cliente de Anthropic.
+
+Documentacion: https://openrouter.ai/docs
+"""
+
+import logging
+import os
+
+import httpx
+
+from agent.llm.base import ErrorLLM, ProveedorLLM
+
+logger = logging.getLogger("agentkit")
+
+BASE_URL_POR_DEFECTO = "https://openrouter.ai/api/v1"
+
+
+class ProveedorOpenRouter(ProveedorLLM):
+    """Proveedor de IA usando OpenRouter."""
+
+    def __init__(self):
+        self.api_key = os.getenv("OPENROUTER_API_KEY", "")
+        # Sin default: el slug cambia seguido y uno viejo tira 404. Se elige en la
+        # entrevista contra https://openrouter.ai/models, no se inventa aca.
+        self.modelo = os.getenv("OPENROUTER_MODEL", "").strip()
+        # OpenRouter unifica el esfuerzo de razonamiento entre proveedores.
+        # Dejalo vacio en el .env para no mandar el parametro.
+        self.esfuerzo = os.getenv("OPENROUTER_EFFORT", "low").strip()
+        self.max_tokens = int(os.getenv("OPENROUTER_MAX_TOKENS") or "4096")
+        # Mismo cuidado que en zernio.py: os.getenv(clave, default) solo usa el default
+        # si la clave NO existe. Como el .env trae "OPENROUTER_BASE_URL=" vacia, el "or"
+        # es lo que hace que el default se aplique igual.
+        self.base_url = (os.getenv("OPENROUTER_BASE_URL") or BASE_URL_POR_DEFECTO).rstrip("/")
+
+        if not self.api_key:
+            logger.warning("OPENROUTER_API_KEY no esta configurada: el agente no va a poder responder")
+        if not self.modelo:
+            logger.warning(
+                "OPENROUTER_MODEL no esta configurado: el agente no va a poder responder. "
+                "Elegi un modelo en https://openrouter.ai/models"
+            )
+
+    async def generar(self, system_prompt: str, mensajes: list[dict]) -> str:
+        if not self.api_key:
+            raise ErrorLLM("Falta OPENROUTER_API_KEY")
+        if not self.modelo:
+            raise ErrorLLM("Falta OPENROUTER_MODEL")
+
+        cuerpo = {
+            "model": self.modelo,
+            # OpenRouter usa el formato de OpenAI: el system prompt es un mensaje mas,
+            # no un parametro aparte como en la API de Anthropic.
+            "messages": [{"role": "system", "content": system_prompt}] + mensajes,
+            "max_tokens": self.max_tokens,
+        }
+        if self.esfuerzo:
+            cuerpo["reasoning"] = {"effort": self.esfuerzo}
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as cliente:
+                r = await cliente.post(
+                    f"{self.base_url}/chat/completions",
+                    json=cuerpo,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                )
+        except httpx.HTTPError as e:
+            raise ErrorLLM(f"Error de red hablando con OpenRouter: {e}") from e
+
+        if r.status_code != 200:
+            detalle = r.text[:500]
+            try:
+                detalle = (r.json().get("error") or {}).get("message", detalle)
+            except ValueError:
+                pass
+            raise ErrorLLM(f"OpenRouter respondio {r.status_code}: {detalle}")
+
+        datos = r.json()
+        eleccion = (datos.get("choices") or [{}])[0]
+
+        if eleccion.get("finish_reason") == "length":
+            logger.warning(
+                f"La respuesta se corto por llegar al tope de {self.max_tokens} tokens. "
+                "Si pasa seguido, sube OPENROUTER_MAX_TOKENS o acorta el system prompt."
+            )
+
+        texto = ((eleccion.get("message") or {}).get("content") or "").strip()
+        if not texto:
+            logger.warning("OpenRouter devolvio una respuesta sin texto")
+            return ""
+
+        uso = datos.get("usage") or {}
+        logger.info(
+            f"Respuesta generada con {self.modelo} "
+            f"({uso.get('prompt_tokens', '?')} in / {uso.get('completion_tokens', '?')} out)"
+        )
+        return texto
+```
+
+#### 3.12 — `agent/brain.py`
+
+```python
+# agent/brain.py — Cerebro del agente: arma el prompt y llama al proveedor de IA
+# Generado por AgentKit
+
+"""
+Logica de IA del agente. Lee el system prompt de config/prompts.yaml, arma el
+historial y se lo pasa al proveedor de IA elegido (agent/llm/).
+"""
+
+import logging
+
+import yaml
 from dotenv import load_dotenv
+
+from agent.llm import obtener_proveedor_llm
+from agent.llm.base import ErrorLLM
 
 load_dotenv()
 logger = logging.getLogger("agentkit")
 
-client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-
-# El modelo se cambia desde .env, sin tocar el codigo.
-#   claude-opus-5     el mas capaz             $5 / $25 por millon de tokens
-#   claude-sonnet-5   el balanceado (default)  $3 / $15
-#   claude-haiku-4-5  el mas barato y rapido   $1 / $5
-# El "or" y no el default de os.getenv: una variable declarada vacia en el .env
-# devuelve "" y dejaria al agente sin modelo.
-MODELO = os.getenv("ANTHROPIC_MODEL") or "claude-sonnet-5"
-
-# Es un bot de respuestas cortas: con esfuerzo bajo contesta mas rapido y mas barato.
-# Dejalo vacio en el .env para no mandar el parametro.
-ESFUERZO = os.getenv("ANTHROPIC_EFFORT", "low").strip()
-
-# WhatsApp son mensajes cortos, pero este tope NO es solo la respuesta: en los modelos
-# actuales el razonamiento interno tambien cuenta contra el. Con el margen justo, una
-# pregunta que exija pensar un poco deja al agente sin espacio para contestar.
-MAX_TOKENS = int(os.getenv("ANTHROPIC_MAX_TOKENS") or "4096")
-
-# Los modelos mas viejos no aceptan output_config. Si la primera llamada falla por eso,
-# se reintenta sin el parametro y se recuerda para las siguientes.
-_soporta_esfuerzo = True
+# Igual que con providers/obtener_proveedor() en main.py: si la configuracion esta mal,
+# el servidor igual tiene que arrancar y contarlo, en vez de morirse en el import. Y hay
+# que llamarlo DESPUES de load_dotenv(): este modulo se importa antes de que main.py
+# corra su propio load_dotenv(), asi que si no se hace aca, los proveedores de agent/llm/
+# leerian el .env vacio.
+proveedor_llm = None
+error_configuracion_llm: str | None = None
+try:
+    proveedor_llm = obtener_proveedor_llm()
+except Exception as e:  # noqa: BLE001 — cualquier problema de configuracion
+    error_configuracion_llm = str(e)
 
 
 def cargar_config_prompts() -> dict:
@@ -1266,35 +1687,9 @@ def obtener_mensaje_fallback() -> str:
     )
 
 
-def _extraer_texto(respuesta) -> str:
-    """
-    Junta el texto de la respuesta de Claude.
-
-    Ojo: NO se puede hacer respuesta.content[0].text. La respuesta es una lista de
-    bloques y el primero no siempre es texto (los modelos que razonan devuelven
-    primero un bloque de pensamiento). Hay que filtrar por tipo.
-    """
-    partes = [bloque.text for bloque in respuesta.content if bloque.type == "text"]
-    return "\n".join(p for p in partes if p).strip()
-
-
-def _es_error_de_esfuerzo(error: Exception) -> bool:
-    """
-    True solo si el modelo rechazo la llamada POR el parametro output_config/effort.
-
-    Se exige que sea un 400 de peticion invalida y no cualquier error que mencione la
-    palabra: un 529 de sobrecarga que la nombre de paso no debe apagar el parametro
-    para todo el proceso.
-    """
-    if getattr(error, "status_code", None) != 400:
-        return False
-    texto = str(error).lower()
-    return "output_config" in texto or "effort" in texto
-
-
 async def generar_respuesta(mensaje: str, historial: list[dict]) -> tuple[str, bool]:
     """
-    Genera una respuesta con Claude.
+    Genera una respuesta con el proveedor de IA configurado.
 
     Args:
         mensaje: el mensaje nuevo del cliente
@@ -1308,7 +1703,9 @@ async def generar_respuesta(mensaje: str, historial: list[dict]) -> tuple[str, b
         guardar esos avisos en el historial: si se guardaran, quedarian contaminando
         el contexto de todos los mensajes siguientes.
     """
-    global _soporta_esfuerzo
+    if proveedor_llm is None:
+        logger.error(f"Proveedor de IA no configurado: {error_configuracion_llm}")
+        return obtener_mensaje_error(), False
 
     if not mensaje or len(mensaje.strip()) < 2:
         return obtener_mensaje_fallback(), False
@@ -1317,53 +1714,20 @@ async def generar_respuesta(mensaje: str, historial: list[dict]) -> tuple[str, b
     mensajes.append({"role": "user", "content": mensaje})
 
     system_prompt = cargar_system_prompt()
-    extras = {"output_config": {"effort": ESFUERZO}} if (_soporta_esfuerzo and ESFUERZO) else {}
-
-    async def _llamar(parametros_extra: dict):
-        return await client.messages.create(
-            model=MODELO,
-            max_tokens=MAX_TOKENS,
-            system=system_prompt,
-            messages=mensajes,
-            **parametros_extra,
-        )
 
     try:
-        respuesta = await _llamar(extras)
-    except Exception as e:  # noqa: BLE001
-        if extras and _es_error_de_esfuerzo(e):
-            logger.warning(
-                f"El modelo {MODELO} no acepta output_config.effort; se reintenta sin ese parametro."
-            )
-            _soporta_esfuerzo = False
-            try:
-                respuesta = await _llamar({})
-            except Exception as e2:  # noqa: BLE001
-                logger.error(f"Error llamando a Claude: {e2}")
-                return obtener_mensaje_error(), False
-        else:
-            logger.error(f"Error llamando a Claude: {e}")
-            return obtener_mensaje_error(), False
+        texto = await proveedor_llm.generar(system_prompt, mensajes)
+    except ErrorLLM as e:
+        logger.error(f"Error llamando al proveedor de IA: {e}")
+        return obtener_mensaje_error(), False
 
-    if getattr(respuesta, "stop_reason", None) == "max_tokens":
-        logger.warning(
-            f"La respuesta se corto por llegar al tope de {MAX_TOKENS} tokens. "
-            "Si pasa seguido, sube ANTHROPIC_MAX_TOKENS o acorta el system prompt."
-        )
-
-    texto = _extraer_texto(respuesta)
     if not texto:
-        logger.warning("Claude devolvio una respuesta sin texto")
         return obtener_mensaje_fallback(), False
 
-    logger.info(
-        f"Respuesta generada con {MODELO} "
-        f"({respuesta.usage.input_tokens} in / {respuesta.usage.output_tokens} out)"
-    )
     return texto, True
 ```
 
-#### 3.9 — `agent/memory.py`
+#### 3.13 — `agent/memory.py`
 
 ```python
 # agent/memory.py — Memoria de conversaciones
@@ -1539,7 +1903,7 @@ async def limpiar_historial(telefono: str):
         await session.commit()
 ```
 
-#### 3.10 — `agent/tools.py`
+#### 3.14 — `agent/tools.py`
 
 Genera herramientas ESPECÍFICAS según los casos de uso elegidos por el usuario.
 Usa este template base y agrega las funciones según el caso:
@@ -1642,7 +2006,7 @@ def buscar_en_knowledge(consulta: str) -> str:
 
 Siempre incluir un archivo `agent/__init__.py` vacío y un `tests/__init__.py` vacío.
 
-#### 3.11 — `tests/test_local.py`
+#### 3.15 — `tests/test_local.py`
 
 ```python
 # tests/test_local.py — Simulador de chat en terminal
@@ -1725,17 +2089,21 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-#### 3.12 — Archivos de infraestructura
+#### 3.16 — Archivos de infraestructura
 
 **`.env` (generado, NUNCA va a GitHub):**
 
-Genera SOLO las variables del proveedor elegido. Las del otro no van, ni comentadas.
+Genera SOLO las variables del proveedor elegido — en las dos capas (IA y WhatsApp).
+Las del proveedor que NO se eligió no van, ni comentadas.
 
 ```env
 # AgentKit — Variables de entorno
 # Generado por AgentKit — NO subir a GitHub
 
-# ── Anthropic ──────────────────────────────────────────────
+# ── Proveedor de IA ────────────────────────────────────────
+LLM_PROVIDER=anthropic
+
+# ── Si LLM_PROVIDER=anthropic ──────────────────────────────
 ANTHROPIC_API_KEY=sk-ant-...
 # claude-opus-5 | claude-sonnet-5 | claude-haiku-4-5
 ANTHROPIC_MODEL=claude-sonnet-5
@@ -1743,6 +2111,15 @@ ANTHROPIC_MODEL=claude-sonnet-5
 ANTHROPIC_EFFORT=low
 # Opcional, default 4096. El razonamiento interno cuenta contra este tope.
 # ANTHROPIC_MAX_TOKENS=4096
+
+# ── Si LLM_PROVIDER=openrouter ─────────────────────────────
+# OPENROUTER_API_KEY=sk-or-v1-...
+# Slug exacto de https://openrouter.ai/models, ej: anthropic/claude-sonnet-4.5
+# OPENROUTER_MODEL=
+# Esfuerzo de razonamiento: low | medium | high. Vacio = no enviar el parametro.
+# OPENROUTER_EFFORT=low
+# Opcional, default 4096.
+# OPENROUTER_MAX_TOKENS=4096
 
 # ── Proveedor de WhatsApp ──────────────────────────────────
 WHATSAPP_PROVIDER=zernio
@@ -1829,9 +2206,20 @@ README.md
 CLAUDE.md
 docs/
 scripts/
+node_modules/
+.wrangler/
+worker/
+wrangler.jsonc
+package.json
+package-lock.json
 ```
 
-#### 3.13 — Archivos de `/knowledge`
+Las últimas líneas son para el caso de Cloudflare: el Worker y su configuración corren
+*afuera* del container, así que no tienen nada que hacer adentro de la imagen. Dejarlas
+igual cuando el usuario despliega en Railway no molesta — esos archivos simplemente no
+existen.
+
+#### 3.17 — Archivos de `/knowledge`
 
 Si hay archivos en `/knowledge`, léelos (txt, pdf, csv, md, json, docx) y extrae el
 contenido relevante para incorporarlo textualmente en el system prompt de
@@ -1846,14 +2234,14 @@ Si un archivo es muy grande, prioriza lo que un cliente preguntaría por WhatsAp
 
 1. **Ejecutar el simulador de chat:**
    ```bash
-   python tests/test_local.py
+   .venv/bin/python tests/test_local.py
    ```
 
 2. **El usuario escribe como si fuera un cliente** y ve las respuestas del agente.
 
 3. **Verificar que el servidor arranca** (en otra terminal, o después de salir del test):
    ```bash
-   uvicorn agent.main:app --reload --port 8000
+   .venv/bin/uvicorn agent.main:app --reload --port 8000
    curl http://localhost:8000/
    ```
    Tiene que responder `{"status":"ok","service":"agentkit","proveedor":"..."}`.
@@ -1877,12 +2265,38 @@ Si un archivo es muy grande, prioriza lo que un cliente preguntaría por WhatsAp
 
 ---
 
-### FASE 5 — Deploy a Railway
+### FASE 5 — Deploy a producción
 
 Solo ejecutar si el usuario confirma que quiere hacer deploy.
 
-1. **Docker es opcional.** Railway construye la imagen a partir del `Dockerfile` en sus
-   servidores; el usuario no necesita Docker en su máquina para hacer deploy.
+0. **Preguntar dónde quiere desplegar** (una pregunta, como todas):
+
+   ```
+   ¿Dónde quieres publicar tu agente?
+
+   1. Railway (RECOMENDADO)
+      Conectas tu repo de GitHub y Railway levanta el agente. Tiene PostgreSQL
+      integrado en dos clics y el servidor queda siempre despierto: el primer
+      mensaje del día responde igual de rápido que el resto.
+      Cuesta $5 al mes (plan Hobby), con $5 de crédito de prueba al arrancar.
+
+   2. Cloudflare Containers
+      Corre el mismo agente en la red de Cloudflare. Se paga por uso real: si tu
+      agente pasa la noche sin mensajes, no pagas ese tiempo. A cambio, cuando
+      está dormido el primer mensaje tarda unos segundos más en despertar el
+      servidor, y Cloudflare NO tiene base de datos SQL propia: hay que conectar
+      un PostgreSQL de afuera (Neon, Supabase) sí o sí.
+      Requiere el plan Workers Paid ($5 al mes) más el consumo.
+
+   Si es tu primer agente, Railway es el camino corto.
+   ```
+
+   Según la respuesta, seguí **5A (Railway)** o **5B (Cloudflare Containers)**. Los pasos
+   1 y 2 de abajo son comunes a los dos.
+
+1. **Docker es opcional.** Tanto Railway como Cloudflare construyen la imagen a partir del
+   `Dockerfile` en sus servidores; el usuario no necesita Docker en su máquina para hacer
+   deploy.
 
    Solo si el usuario quiere probar la imagen localmente antes de subirla:
    ```bash
@@ -1890,6 +2304,9 @@ Solo ejecutar si el usuario confirma que quiere hacer deploy.
    docker compose up --build
    ```
    Si no tiene Docker, no lo trabes ahí: continúa al paso siguiente.
+
+   (Excepción: `wrangler dev` sí necesita Docker corriendo en la máquina para probar un
+   container de Cloudflare en local. Para el deploy no hace falta.)
 
 2. **IMPORTANTE: Antes de subir a GitHub, reemplazar el `.gitignore`.**
 
@@ -1928,9 +2345,15 @@ Solo ejecutar si el usuario confirma que quiere hacer deploy.
    # IDE
    .vscode/
    .idea/
+
+   # Node (solo si despliegas en Cloudflare)
+   node_modules/
+   .wrangler/
    ```
 
 3. **Instrucciones para Railway (mostrar paso a paso):**
+
+   Este paso es la vía **5A**. Si el usuario eligió Cloudflare, saltá directo a 5B.
 
    ```
    === Deploy a Railway ===
@@ -1964,12 +2387,11 @@ Solo ejecutar si el usuario confirma que quiere hacer deploy.
 
    Paso 3: Variables de entorno
       En Railway → tu proyecto → Variables, agrega:
-      - ANTHROPIC_API_KEY   = [tu key]
-      - ANTHROPIC_MODEL     = claude-sonnet-5
+      - LLM_PROVIDER        = [anthropic | openrouter]
       - WHATSAPP_PROVIDER   = [zernio | meta]
       - ENVIRONMENT         = production
       - DATABASE_URL        = ${{Postgres.DATABASE_URL}}
-      - [Variables del proveedor elegido — ver abajo]
+      - [Variables de los dos proveedores elegidos — ver abajo]
 
       NO agregues PORT: Railway lo asigna solo y el Dockerfile ya lo respeta.
 
@@ -1989,6 +2411,9 @@ Solo ejecutar si el usuario confirma que quiere hacer deploy.
       Pero el disco del contenedor es efimero, asi que CADA vez que Railway
       redespliegue —cada push, cada cambio de variable— el historial de todas las
       conversaciones se borra y el agente deja de acordarse de sus clientes.
+
+      Si ANTHROPIC:   ANTHROPIC_API_KEY, ANTHROPIC_MODEL (y ANTHROPIC_EFFORT si lo usas)
+      Si OPENROUTER:  OPENROUTER_API_KEY, OPENROUTER_MODEL (y OPENROUTER_EFFORT si lo usas)
 
       Si ZERNIO:  ZERNIO_API_KEY, ZERNIO_WEBHOOK_SECRET, ZERNIO_ACCOUNT_ID (opcional)
       Si META:    META_ACCESS_TOKEN, META_PHONE_NUMBER_ID, META_VERIFY_TOKEN, META_APP_SECRET
@@ -2031,6 +2456,220 @@ Solo ejecutar si el usuario confirma que quiere hacer deploy.
    ¡Listo! Tu agente ya está en producción.
    ```
 
+3B. **Instrucciones para Cloudflare Containers (vía 5B).**
+
+   Solo si el usuario eligió Cloudflare en el paso 0. Lo que sigue reemplaza al paso 3
+   de Railway; el resto de la fase (regla de 24 horas, resumen final) es igual.
+
+   **Antes de generar nada, entendé el modelo — es distinto a Railway.** En Cloudflare
+   el container NO recibe tráfico directo de internet: delante hay siempre un Worker
+   que hace de puerta de entrada y le reenvía la petición. Por eso, además del
+   `Dockerfile` que ya existe, hay que generar tres archivos nuevos. El código Python
+   del agente **no se toca**.
+
+   **Diferencias que hay que decirle al usuario ANTES de empezar, no después:**
+
+   - **El container duerme.** Después de un rato sin mensajes se apaga, y el siguiente
+     mensaje tiene que esperar a que arranque de nuevo. Eso es lo que abarata la
+     factura, pero también es un riesgo: el proveedor de WhatsApp corta a los 5
+     segundos y reintenta. Por eso abajo se configura `sleepAfter` largo.
+   - **El disco se borra CADA VEZ que el container duerme**, no solo en cada
+     redespliegue. Con SQLite, el agente perdería el historial de todos sus clientes
+     varias veces al día. Y Cloudflare no tiene base de datos SQL propia para esto.
+     **PostgreSQL externo (Neon, Supabase) no es opcional acá: es obligatorio.**
+     Si el usuario no quiere contratar una base aparte, decíselo claro y recomendale
+     Railway en su lugar, en vez de dejarlo desplegar algo que va a perder datos.
+   - Requiere el plan **Workers Paid** ($5/mes) y encima se paga el consumo del
+     container.
+
+   **Archivo 1 — `package.json`:**
+
+   ```json
+   {
+     "name": "agentkit-cloudflare",
+     "private": true,
+     "dependencies": {
+       "@cloudflare/containers": "^0.3.7"
+     },
+     "devDependencies": {
+       "wrangler": "^4.127.0"
+     }
+   }
+   ```
+
+   Antes de escribirlo, confirmá las versiones con `npm view @cloudflare/containers version`
+   y `npm view wrangler version`: `@cloudflare/containers` todavía está en `0.x` y se mueve
+   rápido, así que las de acá arriba envejecen.
+
+   **Archivo 2 — `worker/index.js`:**
+
+   ```javascript
+   // worker/index.js — Puerta de entrada del agente en Cloudflare
+   // Generado por AgentKit
+
+   // En Cloudflare el container no recibe trafico de internet directamente: este Worker
+   // es la puerta de entrada y le reenvia la peticion tal cual. Reenviar el "request"
+   // sin tocarlo es importante: la verificacion de firma del webhook usa el cuerpo
+   // crudo, y si lo leyeramos o lo re-serializaramos aca, el HMAC dejaria de coincidir.
+
+   import { Container, getContainer } from "@cloudflare/containers";
+   import { env } from "cloudflare:workers";
+
+   export class AgenteContainer extends Container {
+     // El puerto donde escucha uvicorn adentro del contenedor
+     defaultPort = 8000;
+
+     // Cuanto se queda despierto sin recibir mensajes.
+     // El default de la libreria son 10 minutos, y es muy poco para esto: cada vez que
+     // el container duerme, el siguiente mensaje paga el arranque en frio, y el
+     // proveedor de WhatsApp corta a los 5 segundos. Con una hora, un negocio con
+     // clientes escribiendo a lo largo del dia casi nunca lo paga.
+     sleepAfter = "1h";
+
+     // Las variables de entorno del agente. Salen de los secrets y vars del Worker:
+     // NUNCA se escriben aca, que este archivo si va a GitHub.
+     envVars = {
+       LLM_PROVIDER: env.LLM_PROVIDER,
+       WHATSAPP_PROVIDER: env.WHATSAPP_PROVIDER,
+       ENVIRONMENT: env.ENVIRONMENT,
+       DATABASE_URL: env.DATABASE_URL,
+       // + SOLO las del proveedor de IA elegido (ANTHROPIC_* u OPENROUTER_*)
+       // + SOLO las del proveedor de WhatsApp elegido (ZERNIO_* o META_*)
+     };
+   }
+
+   export default {
+     async fetch(request) {
+       // Sin nombre, getContainer usa siempre la MISMA instancia ("cf-singleton-container").
+       // Eso es a proposito y no hay que cambiarlo: main.py usa un candado por telefono
+       // que vive en la memoria del proceso, asi que si el trafico se repartiera entre
+       // varias instancias, dos mensajes del mismo cliente podrian procesarse en paralelo
+       // y mezclarle el historial.
+       return getContainer(env.AGENTE_CONTAINER).fetch(request);
+     },
+   };
+   ```
+
+   **Archivo 3 — `wrangler.jsonc`:**
+
+   ```jsonc
+   {
+     "name": "agentkit",
+     "main": "worker/index.js",
+     "compatibility_date": "2026-01-15",
+     "containers": [
+       {
+         "class_name": "AgenteContainer",
+         "image": "./Dockerfile",
+         // basic = 1 GiB de memoria, 1/4 de vCPU. Alcanza de sobra para este agente.
+         "instance_type": "basic",
+         "max_instances": 1
+       }
+     ],
+     "durable_objects": {
+       "bindings": [
+         { "name": "AGENTE_CONTAINER", "class_name": "AgenteContainer" }
+       ]
+     },
+     "migrations": [
+       {
+         "tag": "v1",
+         // Los containers se manejan como Durable Objects con almacenamiento SQLite.
+         "new_sqlite_classes": ["AgenteContainer"]
+       }
+     ],
+     "vars": {
+       "ENVIRONMENT": "production",
+       "LLM_PROVIDER": "anthropic",
+       "WHATSAPP_PROVIDER": "zernio"
+     }
+   }
+   ```
+
+   Ajustá `LLM_PROVIDER` y `WHATSAPP_PROVIDER` a lo que el usuario eligió de verdad.
+
+   **Los pasos, para mostrarle al usuario:**
+
+   ```
+   === Deploy a Cloudflare Containers ===
+
+   Paso 1: Consigue una base de datos PostgreSQL
+
+      Cloudflare no tiene una base SQL propia que le sirva a este agente, y el disco
+      del container se borra cada vez que se duerme. Sin esto, tu agente olvida a
+      todos sus clientes varias veces al dia.
+
+      1. Crea una base gratis en neon.com (o supabase.com)
+      2. Copia la connection string. Te va a dar algo como:
+            postgresql://usuario:clave@host.neon.tech/dbname
+      3. Guardala: la vas a cargar como secreto en el Paso 3.
+
+   Paso 2: Instala wrangler e inicia sesion
+
+      npm install
+      npx wrangler login
+
+      Se abre el navegador para que autorices tu cuenta de Cloudflare.
+      Si todavia no tienes el plan Workers Paid, activalo: Cloudflare lo pide para
+      poder usar containers.
+
+   Paso 3: Carga los secretos
+
+      Los secretos NO van en wrangler.jsonc (ese archivo si va a GitHub). Se cargan
+      uno por uno y quedan guardados en Cloudflare:
+
+         npx wrangler secret put DATABASE_URL
+         npx wrangler secret put ANTHROPIC_API_KEY
+         npx wrangler secret put ZERNIO_API_KEY
+         npx wrangler secret put ZERNIO_WEBHOOK_SECRET
+
+      Cada comando te pide el valor y no lo muestra en pantalla.
+
+      OJO con DATABASE_URL: pega la connection string de Neon TAL CUAL, empezando
+      con "postgresql://". El agente la reescribe solo al driver asincrono que
+      necesita; no tienes que tocarla.
+
+      [Ajusta la lista segun los proveedores que eligio el usuario: ANTHROPIC_* u
+       OPENROUTER_*, ZERNIO_* o META_*]
+
+   Paso 4: Publica
+
+      npx wrangler deploy
+
+      La primera vez tarda varios minutos: Cloudflare construye la imagen Docker en
+      sus servidores y la sube. Al terminar te da la URL publica, algo como
+      https://agentkit.TU-CUENTA.workers.dev
+
+      Verifica que responde antes de seguir:
+         curl https://agentkit.TU-CUENTA.workers.dev/
+      Tiene que contestar {"status":"ok",...}. Ojo: la PRIMERA llamada puede tardar
+      unos segundos porque tiene que despertar el container; la segunda ya es rapida.
+      Si contesta {"status":"error",...}, el campo "detalle" dice que variable falta.
+
+   Paso 5: Configura el webhook
+
+      Igual que en Railway, pero con tu URL de Cloudflare:
+      https://agentkit.TU-CUENTA.workers.dev/webhook
+
+      Si ZERNIO:
+         1. Ve a zernio.com → dashboard → Webhooks → Create webhook
+         2. URL: https://agentkit.TU-CUENTA.workers.dev/webhook
+         3. Secret: el mismo valor que cargaste en ZERNIO_WEBHOOK_SECRET
+         4. Eventos: marca "message.received" → Guardar
+         5. Usa el boton "Send test" para confirmar que responde 200
+
+      Si META:
+         1. Ve a developers.facebook.com → tu app → WhatsApp → Configuration
+         2. Callback URL: https://agentkit.TU-CUENTA.workers.dev/webhook
+         3. Verify Token: el mismo de META_VERIFY_TOKEN
+         4. Suscribete al campo "messages" → Guardar
+
+   Para ver los logs de tu agente:
+      npx wrangler tail
+
+   ¡Listo! Tu agente ya esta en produccion.
+   ```
+
 4. **Contarle al usuario la regla de las 24 horas:**
 
    ```
@@ -2054,7 +2693,7 @@ Solo ejecutar si el usuario confirma que quiere hacer deploy.
 
    Lo que se construyó:
    - Servidor FastAPI con webhook de WhatsApp (firma verificada)
-   - Cerebro con Claude AI ([MODELO])
+   - Cerebro con [PROVEEDOR_IA] ([MODELO])
    - Memoria de conversaciones por cliente
    - Deduplicación de eventos: nunca responde dos veces lo mismo
    - Herramientas base en tools.py: [LAS QUE REALMENTE ESCRIBISTE]
@@ -2062,15 +2701,17 @@ Solo ejecutar si el usuario confirma que quiere hacer deploy.
    - Docker Compose para producción
 
    Archivos generados:
-   - agent/main.py, brain.py, memory.py, tools.py, providers/
+   - agent/main.py, brain.py, memory.py, tools.py, providers/, llm/
    - config/business.yaml, prompts.yaml
    - tests/test_local.py
    - Dockerfile, docker-compose.yml, .dockerignore, .env
+   - [Si Cloudflare: worker/index.js, wrangler.jsonc, package.json]
 
    Comandos útiles:
-   - Test local:     python tests/test_local.py
-   - Arrancar:       uvicorn agent.main:app --reload --port 8000
+   - Test local:     .venv/bin/python tests/test_local.py
+   - Arrancar:       .venv/bin/uvicorn agent.main:app --reload --port 8000
    - Docker:         docker compose up --build
+   - [Si Cloudflare: publicar con "npx wrangler deploy", logs con "npx wrangler tail"]
 
    ¿Necesitas ajustar algo? Escríbeme en cualquier momento.
    ===========================================================
@@ -2091,8 +2732,14 @@ Solo ejecutar si el usuario confirma que quiere hacer deploy.
 9. **Pregunta antes de sobreescribir** archivos existentes en `/config` o `.env`
 10. **Mantén simple**: no agregues features que el usuario no pidió
 11. **Valida en cada fase** antes de avanzar a la siguiente
-12. **Genera SOLO el adaptador del proveedor elegido** — no los dos
-13. **No cambies el modelo de Claude por tu cuenta** para ahorrar: es decisión del usuario
+12. **Genera SOLO el adaptador del proveedor elegido en cada capa** — WhatsApp (Zernio o
+    Meta) e IA (Anthropic u OpenRouter) — nunca los dos de una capa. Lo mismo con el
+    destino de deploy: los archivos de Cloudflare solo si eligió Cloudflare
+13. **No cambies el modelo ni el proveedor de IA por tu cuenta** para ahorrar: es decisión
+    del usuario
+14. **Nunca dejes desplegar en Cloudflare con SQLite**: el disco se borra cada vez que el
+    container duerme. Si el usuario no quiere una base PostgreSQL externa, recomendale
+    Railway en vez de dejarlo perder el historial de sus clientes
 
 ---
 
@@ -2100,10 +2747,10 @@ Solo ejecutar si el usuario confirma que quiere hacer deploy.
 
 ```bash
 # Arrancar agente local
-uvicorn agent.main:app --reload --port 8000
+.venv/bin/uvicorn agent.main:app --reload --port 8000
 
 # Test sin WhatsApp
-python tests/test_local.py
+.venv/bin/python tests/test_local.py
 
 # Build Docker
 docker compose up --build
@@ -2112,7 +2759,7 @@ docker compose up --build
 docker compose logs -f agent
 
 # Instalar dependencias
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 
 # Auditar el repo de AgentKit (no el agente generado)
 python3 scripts/audit.py
@@ -2123,11 +2770,21 @@ python3 scripts/audit.py
 ## 8. Variables de entorno
 
 ```env
-# ── Anthropic ─────────────────────────────────────────────
+# ── Proveedor de IA (anthropic | openrouter) ──────────────
+LLM_PROVIDER=
+
+# ── Anthropic (si LLM_PROVIDER=anthropic) ─────────────────
 ANTHROPIC_API_KEY=sk-ant-...
 ANTHROPIC_MODEL=claude-sonnet-5     # claude-opus-5 | claude-sonnet-5 | claude-haiku-4-5
 ANTHROPIC_EFFORT=low                # low | medium | high — vacio para no enviarlo
 # ANTHROPIC_MAX_TOKENS=4096         # opcional, default 4096
+
+# ── OpenRouter (si LLM_PROVIDER=openrouter) ───────────────
+OPENROUTER_API_KEY=sk-or-v1-...
+OPENROUTER_MODEL=                   # slug de https://openrouter.ai/models, sin default
+OPENROUTER_EFFORT=low               # low | medium | high — vacio para no enviarlo
+# OPENROUTER_MAX_TOKENS=4096        # opcional, default 4096
+# OPENROUTER_BASE_URL=              # opcional, default https://openrouter.ai/api/v1
 
 # ── Proveedor de WhatsApp (zernio | meta) ─────────────────
 WHATSAPP_PROVIDER=

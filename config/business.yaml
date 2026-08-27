@@ -1,0 +1,20 @@
+# Configuración del negocio — Generado por AgentKit
+negocio:
+  nombre: "Pisan AI"
+  descripcion: >
+    Consultoría de IA: creamos soluciones a medida con Inteligencia Artificial
+    para que los clientes puedan potenciar y automatizar sus negocios. Ofrecemos
+    consultoría, implementación y auditoría de soluciones basadas en IA, desde
+    agentes de ventas automatizados hasta aplicaciones personalizadas.
+  horario: "Lunes a Viernes 9am a 6pm, Sábados 10am a 2pm"
+
+agente:
+  nombre: "Cris"
+  tono: "Amigable y casual"
+  casos_de_uso:
+    - "Responder preguntas frecuentes sobre los servicios de Pisan AI"
+
+metadata:
+  creado: "2026-08-27"
+  proveedor: "zernio"
+  version: "2.0"

@@ -62,18 +62,20 @@ Y ya. Claude Code te guía desde ahí.
 
 ## Cómo funciona
 
-`start.sh` solo verifica tu entorno. El sistema real arranca con `/build-agent`, que hace
-que Claude Code lea `CLAUDE.md` y ejecute cinco fases.
+`start.sh` solo prepara tu entorno (Python 3.11 vía `uv` y el entorno virtual). El sistema
+real arranca con `/build-agent`, que hace que Claude Code lea `CLAUDE.md` y ejecute cinco
+fases.
 
 ### Fase 1 — Verifica tu entorno
 
-Chequea Python 3.11+, crea las carpetas, instala las dependencias y prepara el `.env`.
+Chequea el entorno virtual, crea las carpetas, instala las dependencias y prepara el `.env`.
 
 ### Fase 2 — Te entrevista
 
-Diez preguntas, una por una: cómo se llama tu negocio, a qué se dedica, para qué quieres
+Once preguntas, una por una: cómo se llama tu negocio, a qué se dedica, para qué quieres
 el agente, cómo se va a llamar, qué tono debe tener, tu horario, tus archivos de precios
-o menú, tu API key de Anthropic, y con qué servicio vas a conectar WhatsApp.
+o menú, con qué proveedor de IA lo conectas (Anthropic u OpenRouter) y tu API key, y con
+qué servicio vas a conectar WhatsApp.
 
 ### Fase 3 — Construye el agente
 
@@ -83,13 +85,17 @@ Con tus respuestas escribe todo esto:
 tu-proyecto/
 ├── agent/
 │   ├── main.py              Servidor que recibe los mensajes de WhatsApp
-│   ├── brain.py             Conexión con Claude — el cerebro
+│   ├── brain.py             Arma el prompt y llama al proveedor de IA — el cerebro
 │   ├── memory.py            Historial de cada cliente + deduplicación de eventos
 │   ├── tools.py             Herramientas específicas de tu negocio
-│   └── providers/           Conexión con tu servicio de WhatsApp
+│   ├── providers/           Conexión con tu servicio de WhatsApp
+│   │   ├── base.py          Interfaz común
+│   │   ├── __init__.py      Elige el proveedor automáticamente
+│   │   └── zernio.py        Adaptador (o meta.py)
+│   └── llm/                 Conexión con tu proveedor de IA
 │       ├── base.py          Interfaz común
 │       ├── __init__.py      Elige el proveedor automáticamente
-│       └── zernio.py        Adaptador (o meta.py)
+│       └── anthropic_provider.py  Adaptador (o openrouter_provider.py)
 │
 ├── config/
 │   ├── business.yaml        Los datos de tu negocio
@@ -120,9 +126,9 @@ Si algo no te gusta, se lo dices a Claude Code y lo ajusta ahí mismo.
 
 ### Fase 5 — Lo pones en línea
 
-Te guía para subirlo a GitHub, conectarlo con Railway, cargar las variables de entorno y
-configurar el webhook. Desde ese momento, cualquiera que te escriba por WhatsApp habla
-con tu agente.
+Eliges dónde publicarlo — **Railway** (el camino corto) o **Cloudflare Containers** — y
+te guía para subirlo a GitHub, cargar las variables de entorno y configurar el webhook.
+Desde ese momento, cualquiera que te escriba por WhatsApp habla con tu agente.
 
 ---
 
@@ -150,6 +156,25 @@ control total sobre la integración. Es más trabajo de configuración inicial.
 
 Cambiar de uno a otro después es una frase: abre Claude Code y dile *"quiero migrar de
 Zernio a Meta Cloud API"*.
+
+---
+
+## Dónde publicarlo
+
+También eliges esto durante el setup, en la última fase.
+
+| | **Railway** | **Cloudflare Containers** |
+|---|---|---|
+| Cómo se publica | Conectas tu repo de GitHub | `npx wrangler deploy` |
+| Base de datos | PostgreSQL integrado, en dos clics | No tiene: contratas un PostgreSQL aparte (Neon, Supabase) |
+| Siempre despierto | Sí | No: se duerme sin tráfico y el siguiente mensaje espera a que arranque |
+| Costo | $5 al mes (Hobby), con $5 de crédito de prueba | Plan Workers Paid ($5 al mes) más el consumo real |
+| Para quién | **Recomendado.** Tu primer agente | Si ya vives en Cloudflare, o si tu agente recibe mensajes a ratos y prefieres pagar por uso |
+
+El agente es el mismo código en los dos casos — cambia dónde corre. En Cloudflare hay un
+detalle que conviene entender antes de elegirlo: **el disco del container se borra cada vez
+que se duerme**, así que la base PostgreSQL externa no es opcional. Sin ella, tu agente
+olvidaría el historial de sus clientes varias veces al día.
 
 ---
 
@@ -211,11 +236,11 @@ sabe algo, lo dice y ofrece pasar el contacto a una persona.
 
 ## Requisitos
 
-**1. Python 3.11 o superior**
-- Mac: `brew install python` o [python.org](https://python.org/downloads)
-- Windows: [python.org](https://python.org/downloads) (marca "Add to PATH")
-- Linux: `sudo apt install python3.11`
-- Verifica: `python3 --version`
+**1. uv**
+No necesitas instalar Python vos mismo — `start.sh` usa [uv](https://docs.astral.sh/uv/)
+para instalar Python 3.11 y crear el entorno virtual del agente automáticamente.
+- Mac/Linux: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- Windows: `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`
 
 **2. Claude Code**
 ```bash
@@ -224,9 +249,11 @@ npm install -g @anthropic-ai/claude-code
 claude   # solo la primera vez, para autenticarte
 ```
 
-**3. API key de Anthropic**
-[platform.anthropic.com](https://platform.anthropic.com/settings/keys) → Settings →
-API Keys → Create Key. Empieza con `sk-ant-...`.
+**3. Una API key de IA**
+Anthropic directo (recomendado) — [platform.anthropic.com](https://platform.anthropic.com/settings/keys)
+→ Settings → API Keys → Create Key. Empieza con `sk-ant-...`.
+O [OpenRouter](https://openrouter.ai/keys) si querés acceso a Claude y otros modelos con
+una sola key — empieza con `sk-or-v1-...` y hay que cargarle créditos.
 
 **4. Una cuenta de WhatsApp API**
 [Zernio](https://zernio.com) (recomendado) o
@@ -246,6 +273,7 @@ reales en vez de un "es súper barato".
 | Meta Cloud API | Las conversaciones que abre el cliente son gratis. Solo pagas las que inicias tú con plantilla |
 | Claude API | Por uso. Ver el cálculo de abajo |
 | Railway | Ya no hay plan gratuito de verdad: arrancas con $5 de crédito de prueba y después el plan Hobby son $5 al mes |
+| Cloudflare Containers | Alternativa a Railway. Requiere el plan Workers Paid ($5 al mes) e incluye una cuota de consumo; arriba de eso se paga por uso. Ojo: tendrás que contratar un PostgreSQL aparte (Neon o Supabase tienen capa gratis) — ver abajo |
 
 ### Elegir el modelo de Claude
 
@@ -301,10 +329,10 @@ salga andando de la caja.
 
 ```bash
 # Probar el agente sin WhatsApp (chat en terminal)
-python tests/test_local.py
+.venv/bin/python tests/test_local.py
 
 # Arrancar el servidor localmente
-uvicorn agent.main:app --reload --port 8000
+.venv/bin/uvicorn agent.main:app --reload --port 8000
 
 # Build Docker para producción
 docker compose up --build
@@ -335,16 +363,18 @@ claude "Quiero migrar de Zernio a Meta Cloud API."
 
 | Componente | Tecnología | Para qué sirve |
 |---|---|---|
-| IA | Claude (`claude-sonnet-5` por default) | Genera las respuestas |
+| IA | Anthropic / OpenRouter (`claude-sonnet-5` por default) | Genera las respuestas — tú eliges |
 | Servidor | FastAPI + Uvicorn | Recibe los webhooks de WhatsApp |
 | WhatsApp | Zernio / Meta Cloud API | Conecta con WhatsApp — tú eliges |
 | Base de datos | SQLite local / PostgreSQL en producción | Historial y deduplicación |
-| Deploy | Docker + Railway | Pone tu agente en internet |
+| Deploy | Docker + Railway o Cloudflare Containers | Pone tu agente en internet — tú eliges |
 | Config | python-dotenv + YAML | API keys y configuración |
 
-El sistema usa un **patrón adaptador** para los proveedores: cada uno implementa la misma
-interfaz, así que `main.py` no sabe ni le importa cuál estás usando. Solo llama
-`proveedor.verificar_firma()`, `proveedor.parsear_webhook()` y `proveedor.enviar_mensaje()`.
+El sistema usa un **patrón adaptador** en las dos capas intercambiables: cada proveedor
+implementa la misma interfaz, así que el resto del código no sabe ni le importa cuál estás
+usando. Para WhatsApp, `main.py` solo llama `proveedor.verificar_firma()`,
+`proveedor.parsear_webhook()` y `proveedor.enviar_mensaje()`. Para la IA, `brain.py` solo
+llama `proveedor.generar()`.
 
 ---
 
@@ -354,7 +384,8 @@ interfaz, así que `main.py` no sabe ni le importa cuál estás usando. Solo lla
 No. Claude Code escribe todo el código. Tú respondes preguntas sobre tu negocio.
 
 **¿Puedo usarlo con mi negocio real?**
-Sí. Después de probarlo localmente lo subes a Railway y queda atendiendo de verdad.
+Sí. Después de probarlo localmente lo publicas —en Railway o en Cloudflare Containers— y
+queda atendiendo de verdad.
 
 **¿Y si el agente no sabe algo?**
 Responde algo como *"No tengo esa información, déjame conectarte con alguien del equipo."*
