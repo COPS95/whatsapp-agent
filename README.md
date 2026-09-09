@@ -1,23 +1,7 @@
-<p align="center">
-  <a href="https://github.com/COPS95/whatsapp-agent"><img src="https://img.shields.io/github/stars/COPS95/whatsapp-agent?style=flat-square&color=25D366" alt="Estrellas"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/licencia-MIT-blue?style=flat-square" alt="Licencia MIT"></a>
-  <img src="https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square" alt="Python 3.11+">
-  <img src="https://img.shields.io/badge/IA-Claude-D97757?style=flat-square" alt="Claude">
-  <img src="https://img.shields.io/badge/WhatsApp-Zernio%20%7C%20Meta-25D366?style=flat-square" alt="Zernio o Meta Cloud API">
-</p>
-
-<p align="center">
-  <b><a href="https://cops95.github.io/whatsapp-agent/">Ver el sitio</a></b> ·
-  <a href="#inicio-rápido">Inicio rápido</a> ·
-  <a href="#cómo-funciona">Cómo funciona</a> ·
-  <a href="#preguntas-frecuentes">FAQ</a>
-</p>
-
----
 
 ## About
 
-**WhatsApp AgentKit convierte una conversación de 20 minutos en un agente de WhatsApp
+**WhatsApp Agent convierte una conversación de 20 minutos en un agente de WhatsApp
 que atiende a tus clientes.**
 
 No es una plantilla que copias y adaptas. Es un sistema de instrucciones que Claude Code
@@ -31,8 +15,7 @@ Lo hicimos porque el 90% del trabajo de montar un agente de WhatsApp no es la IA
 plomería: webhooks, firmas, tokens, reintentos, deploy. Esa parte ya está resuelta y
 auditada acá adentro. Lo que queda es lo único que solo tú sabes: cómo funciona tu negocio.
 
-Es open source, licencia MIT, y está escrito en español porque se hizo para builders
-de LATAM.
+Es open source, licencia MIT, y está escrito en español.
 
 ---
 
@@ -243,9 +226,11 @@ claude   # solo la primera vez, para autenticarte
 ```
 
 **3. Una API key de IA**
-Anthropic directo (recomendado) — [platform.anthropic.com](https://platform.anthropic.com/settings/keys)
+
+Anthropic directo  — [platform.anthropic.com](https://platform.anthropic.com/settings/keys)
 → Settings → API Keys → Create Key. Empieza con `sk-ant-...`.
-O [OpenRouter](https://openrouter.ai/keys) si querés acceso a Claude y otros modelos con
+
+O [OpenRouter] (recomendado) (https://openrouter.ai/keys) si querés acceso a Claude y otros modelos con
 una sola key — empieza con `sk-or-v1-...` y hay que cargarle créditos.
 
 **4. Una cuenta de WhatsApp API**
@@ -256,7 +241,7 @@ una sola key — empieza con `sk-or-v1-...` y hay que cargarle créditos.
 
 ## Cuánto cuesta
 
-AgentKit es gratis y open source. Lo que pagas es el uso, y conviene verlo con números
+Whatsaap-Agent es gratis y open source. Lo que pagas es el uso, y conviene verlo con números
 reales en vez de un "es súper barato".
 
 | Concepto | Costo real |
@@ -417,9 +402,9 @@ entorno estén documentadas y que los links del README respondan.
 
 ## Créditos
 
-Creado por **Todo de IA** — [@soyenriquerocha](https://instagram.com/soyenriquerocha)
+Creado por: — [@christianpillajo.ai]
 
-Construido con [Claude Code](https://claude.com/claude-code) para builders de LATAM.
+Construido con [Claude Code]
 
 ---
 
